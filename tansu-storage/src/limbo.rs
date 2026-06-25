@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,8 +27,8 @@ use std::{
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetRequest, ListOffsetResponse, METER,
     MetadataResponse, NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse,
-    Result, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
-    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
+    Result, ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest,
+    TxnAddPartitionsResponse, TxnOffsetCommitRequest, TxnState, UpdateError, Version,
     sql::{Cache, default_hash, idempotent_sequence_check, remove_comments},
 };
 use async_trait::async_trait;
@@ -42,7 +42,7 @@ use rand::{rng, seq::SliceRandom as _};
 use regex::Regex;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -1400,6 +1400,7 @@ impl Storage for Engine {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        _max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
         debug!(?topition, offset, min_bytes, max_bytes, ?isolation_level);
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
@@ -1443,6 +1444,18 @@ impl Storage for Engine {
             let offset_delta = 0;
             let timestamp_delta = 0;
 
+            let base_offset = row
+                .get_value(0)
+                .map_err(Into::into)
+                .and_then(|value| {
+                    value
+                        .as_integer()
+                        .copied()
+                        .ok_or(Error::UnexpectedValue(value))
+                })
+                .inspect(|base_offset| debug!(base_offset))
+                .inspect_err(|err| error!(?err))?;
+
             let record_builder = {
                 let mut record_builder = Record::builder()
                     .offset_delta(offset_delta)
@@ -1467,7 +1480,7 @@ impl Storage for Engine {
                             self.cluster.as_str(),
                             topition.topic(),
                             topition.partition(),
-                            offset,
+                            base_offset,
                         ),
                     )
                     .await?;
@@ -1498,18 +1511,7 @@ impl Storage for Engine {
             };
 
             let mut batch_builder = inflated::Batch::builder()
-                .base_offset(
-                    row.get_value(0)
-                        .map_err(Into::into)
-                        .and_then(|value| {
-                            value
-                                .as_integer()
-                                .copied()
-                                .ok_or(Error::UnexpectedValue(value))
-                        })
-                        .inspect(|base_offset| debug!(base_offset))
-                        .inspect_err(|err| error!(?err))?,
-                )
+                .base_offset(base_offset)
                 .attributes(
                     row.get_value(1)
                         .map(|value| {
@@ -1741,7 +1743,7 @@ impl Storage for Engine {
             .unwrap_or_default();
 
         let last_stable = row
-            .get_value(1)
+            .get_value(2)
             .map(|value| value.as_integer().copied())
             .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or(high_watermark);
@@ -2909,7 +2911,7 @@ impl Storage for Engine {
                     .await
                     .inspect_err(|err| error!(?err, group_id))?
                 {
-                    let value = row
+                    let current = row
                         .get_value(1)
                         .map_err(Error::from)
                         .and_then(|value| {
@@ -2918,11 +2920,9 @@ impl Storage for Engine {
                                 .cloned()
                                 .ok_or(Error::UnexpectedValue(value.clone()))
                         })
-                        .map(serde_json::Value::from)
+                        .and_then(|s| serde_json::from_str::<GroupDetail>(&s).map_err(Into::into))
+                        .inspect(|current| debug!(?current))
                         .inspect_err(|err| error!(?err, group_id))?;
-
-                    let current = serde_json::from_value::<GroupDetail>(value)
-                        .inspect(|current| debug!(?current))?;
 
                     results.push(NamedGroupDetail::found(group_id.into(), current));
                 } else {
@@ -3037,16 +3037,18 @@ impl Storage for Engine {
                 })
                 .inspect(|version| debug!(?version))?;
 
-            let value = row.get_value(1).map_err(Error::from).and_then(|value| {
-                value
-                    .as_text()
-                    .map(|v| v.as_str())
-                    .ok_or(Error::UnexpectedValue(value.clone()))
-                    .map(serde_json::Value::from)
-            })?;
-
-            let current =
-                serde_json::from_value::<GroupDetail>(value).inspect(|current| debug!(?current))?;
+            let current = row
+                .get_value(1)
+                .map_err(Error::from)
+                .and_then(|value| {
+                    value
+                        .as_text()
+                        .map(|v| v.as_str())
+                        .ok_or(Error::UnexpectedValue(value.clone()))
+                        .and_then(|s| serde_json::from_str::<GroupDetail>(s).map_err(Into::into))
+                })
+                .inspect(|current| debug!(?current))
+                .map(Box::new)?;
 
             Err(UpdateError::Outdated { current, version })
         };
@@ -3642,6 +3644,31 @@ impl Storage for Engine {
         Ok(self.advertised_listener.clone())
     }
 
+    async fn delete_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+        _credential: ScramCredential,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    async fn user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        todo!()
+    }
+
     async fn ping(&self) -> Result<()> {
         let c = self.connection().await?;
         let _ = c.query("ping.sql", ()).await?;
@@ -4190,6 +4217,105 @@ mod tests {
             .create_topic(creatable_topic, false)
             .await
             .inspect(|uuid| debug!(?uuid))?;
+
+        Ok(())
+    }
+
+    /// An open (uncommitted) transaction must pin the read_committed last stable
+    /// offset below the high watermark. Regressed when `offset_stage` read the
+    /// high-watermark column instead of the stable-offset column, so
+    /// `read_committed` consumers saw uncommitted records.
+    ///
+    /// `#[ignore]`d like every other engine-level test here: turso/limbo cannot
+    /// yet run the full produce flow in CI. Run manually against turso with
+    /// `cargo nextest run --features turso -- --ignored`.
+    #[ignore]
+    #[tokio::test]
+    async fn read_committed_last_stable_offset_pinned_by_open_transaction() -> Result<()> {
+        use tansu_sans_io::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
+
+        let _guard = init_tracing()?;
+
+        let temp_dir = tempdir().inspect(|temporary| debug!(?temporary))?;
+        let file_path = temp_dir.path().join("tansu.db");
+
+        let storage = Url::parse(&format!("file://{}", file_path.display()))?;
+        let cluster = "tansu";
+        let node = 12321;
+
+        let engine = Engine::builder()
+            .advertised_listener(Url::parse("tcp://127.0.0.1:9092")?)
+            .cluster(cluster.to_owned())
+            .storage(storage)
+            .node(node)
+            .build()
+            .await?;
+
+        engine
+            .register_broker(BrokerRegistrationRequest {
+                broker_id: node,
+                cluster_id: cluster.to_owned(),
+                incarnation_id: Uuid::new_v4(),
+                rack: None,
+            })
+            .await?;
+
+        _ = engine
+            .create_topic(
+                CreatableTopic::default()
+                    .name("t".into())
+                    .num_partitions(1)
+                    .replication_factor(1)
+                    .assignments(Some([].into()))
+                    .configs(Some([].into())),
+                false,
+            )
+            .await?;
+
+        let topition = Topition::new("t", 0);
+
+        // a transactional producer begins a transaction and produces, never commits
+        let producer = engine
+            .init_producer(Some("tx"), 10_000, Some(-1), Some(-1))
+            .await?;
+
+        _ = engine
+            .txn_add_partitions(TxnAddPartitionsRequest::VersionZeroToThree {
+                transaction_id: "tx".into(),
+                producer_id: producer.id,
+                producer_epoch: producer.epoch,
+                topics: vec![
+                    AddPartitionsToTxnTopic::default()
+                        .name("t".into())
+                        .partitions(Some(vec![0])),
+                ],
+            })
+            .await?;
+
+        let batch = inflated::Batch::builder()
+            .record(Record::builder().value(Bytes::from_static(b"uncommitted").into()))
+            .attributes(BatchAttribute::default().transaction(true).into())
+            .producer_id(producer.id)
+            .producer_epoch(producer.epoch)
+            .base_sequence(0)
+            .build()
+            .and_then(TryInto::try_into)?;
+
+        _ = engine.produce(Some("tx"), &topition, batch).await?;
+
+        let stage = engine.offset_stage(&topition).await?;
+
+        assert!(
+            stage.high_watermark > 0,
+            "the uncommitted record should advance the high watermark"
+        );
+        assert!(
+            stage.last_stable < stage.high_watermark,
+            "an open transaction must pin last_stable below the high watermark \
+             (last_stable={}, high_watermark={})",
+            stage.last_stable,
+            stage.high_watermark,
+        );
 
         Ok(())
     }

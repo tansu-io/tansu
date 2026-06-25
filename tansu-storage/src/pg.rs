@@ -35,7 +35,7 @@ use rand::{prelude::*, rng};
 use serde_json::Value;
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -72,9 +72,9 @@ use uuid::Uuid;
 
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
     sql::{default_hash, idempotent_sequence_check},
 };
 
@@ -515,6 +515,7 @@ impl Postgres {
                 );
             })
             .inspect_err(|err| {
+                debug!(?err);
                 SQL_ERROR.add(1, &self.attributes_for_error(sql, err)[..]);
             })
             .map_err(Into::into)
@@ -1298,6 +1299,64 @@ impl Postgres {
 
         tx.commit().await.map_err(Into::into).and(Ok(deleted))
     }
+
+    async fn topic_with_key<'a>(&self, topic: &'a str) -> Result<(&'a str, Option<&'a str>)> {
+        if let Some((base, key)) = topic.split_once('/')
+            && self
+                .describe_config(base, ConfigResource::Topic, None)
+                .await
+                .map(|configs| {
+                    configs
+                        .configs
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .find_map(|config| {
+                            if config.name == "tansu.virtual" {
+                                config
+                                    .value
+                                    .as_deref()
+                                    .and_then(|config| bool::from_str(config).ok())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_default()
+                })?
+        {
+            Ok((base, Some(key)))
+        } else {
+            Ok((topic, None))
+        }
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn base_topic<'a>(&self, topic: &'a str) -> Result<&'a str> {
+        self.topic_with_key(topic).await.map(|(topic, _key)| topic)
+    }
+
+    #[instrument(skip(self), ret)]
+    async fn virtual_topic_id(&self, topic: &str, key: &str) -> Result<Uuid> {
+        let uuid = Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            format!("tag:tansu.io,2026-04:virtual:{topic}:{key}",).as_bytes(),
+        );
+
+        let c = self.connection().await.inspect_err(|err| error!(?err))?;
+
+        let row = self
+            .prepare_query_one(
+                &c,
+                "virtual_topic_upsert.sql",
+                &[&self.cluster, &topic, &key.as_bytes(), &uuid],
+            )
+            .await?;
+
+        row.try_get::<_, Uuid>(0)
+            .inspect_err(|err| error!(?err))
+            .map_err(Into::into)
+            .inspect(|vt| debug!(%vt))
+    }
 }
 
 #[async_trait]
@@ -1743,7 +1802,21 @@ impl Storage for Postgres {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
+        let started_at = SystemTime::now();
+
+        let has_deadline_expired = || {
+            started_at
+                .elapsed()
+                .inspect(|elapsed| debug!(?elapsed, ?max_wait))
+                .map(|elapsed| max_wait.saturating_sub(elapsed).is_zero())
+                .unwrap_or_default()
+        };
+
+        let (base_topic, key_filter): (&str, Option<&str>) =
+            self.topic_with_key(topition.topic()).await?;
+
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
             if isolation_level == IsolationLevel::ReadCommitted {
                 offset_stage.last_stable
@@ -1765,8 +1838,24 @@ impl Storage for Postgres {
         let mut c = self.connection().await?;
         let tx = c.transaction().await?;
 
-        let records = self
-            .tx_prepare_query(
+        let records = if let Some(key) = key_filter {
+            self.tx_prepare_query(
+                &tx,
+                "record_fetch_pg_keyed.sql",
+                &[
+                    &self.cluster,
+                    &base_topic,
+                    &topition.partition(),
+                    &offset,
+                    &(max_bytes as i64),
+                    &high_watermark,
+                    &key,
+                ],
+            )
+            .await
+            .inspect_err(|err| error!(?err))?
+        } else {
+            self.tx_prepare_query(
                 &tx,
                 "record_fetch_pg.sql",
                 &[
@@ -1779,7 +1868,8 @@ impl Storage for Postgres {
                 ],
             )
             .await
-            .inspect_err(|err| error!(?err))?;
+            .inspect_err(|err| error!(?err))?
+        };
 
         let mut batches = vec![];
 
@@ -1949,6 +2039,10 @@ impl Storage for Postgres {
                 batch_builder = batch_builder
                     .record(record_builder)
                     .last_offset_delta(offset_delta);
+
+                if has_deadline_expired() {
+                    break;
+                }
             }
 
             batches.push(batch_builder.build().and_then(TryInto::try_into)?);
@@ -1957,6 +2051,8 @@ impl Storage for Postgres {
         }
 
         tx.commit().await?;
+
+        debug!(batches_len = batches.len());
 
         Ok(batches)
     }
@@ -1970,7 +2066,11 @@ impl Storage for Postgres {
             .prepare_query_one(
                 &c,
                 "watermark_select.sql",
-                &[&self.cluster, &topition.topic(), &topition.partition()],
+                &[
+                    &self.cluster,
+                    &self.base_topic(topition.topic()).await?,
+                    &topition.partition(),
+                ],
             )
             .await
             .inspect_err(|err| error!(?topition, ?err))?;
@@ -1986,7 +2086,7 @@ impl Storage for Postgres {
             .unwrap_or_default();
 
         let last_stable = row
-            .try_get::<_, Option<i64>>(1)
+            .try_get::<_, Option<i64>>(2)
             .inspect_err(|err| error!(?topition, ?err))?
             .unwrap_or(high_watermark);
 
@@ -2022,7 +2122,11 @@ impl Storage for Postgres {
                 .tx_prepare_query_opt(
                     &tx,
                     "topition_select.sql",
-                    &[&self.cluster, &topition.topic(), &topition.partition()],
+                    &[
+                        &self.cluster,
+                        &self.base_topic(topition.topic()).await?,
+                        &topition.partition(),
+                    ],
                 )
                 .await
                 .inspect_err(|err| error!(?err))?
@@ -2047,7 +2151,7 @@ impl Storage for Postgres {
                         "consumer_offset_insert.sql",
                         &[
                             &self.cluster,
-                            &topition.topic(),
+                            &self.base_topic(topition.topic()).await?,
                             &topition.partition(),
                             &group,
                             &offset.offset,
@@ -2129,7 +2233,12 @@ impl Storage for Postgres {
                 .prepare_query_opt(
                     &c,
                     "consumer_offset_select.sql",
-                    &[&self.cluster, &group_id, &topic.topic(), &topic.partition()],
+                    &[
+                        &self.cluster,
+                        &group_id,
+                        &self.base_topic(topic.topic()).await?,
+                        &topic.partition(),
+                    ],
                 )
                 .await
                 .and_then(|maybe| {
@@ -2289,22 +2398,37 @@ impl Storage for Postgres {
                 for topic in topics {
                     responses.push(match topic {
                         TopicId::Name(name) => {
+                            let (base_topic, key) = self
+                                .topic_with_key(name.as_str())
+                                .await
+                                .inspect(|(base_topic, key)| debug!(base_topic, key))?;
+
+                            let vtid = if let Some(key) = key {
+                                self.virtual_topic_id(base_topic, key)
+                                    .await
+                                    .map(|uuid| uuid.into_bytes())
+                                    .map(Some)
+                            } else {
+                                Ok(None)
+                            }?;
+
                             match self
                                 .prepare_query_opt(
                                     &c,
                                     "topic_select_name.sql",
-                                    &[&self.cluster, &name.as_str()],
+                                    &[&self.cluster, &base_topic],
                                 )
                                 .await
                                 .inspect_err(|err| error!(?err))
                             {
                                 Ok(Some(row)) => {
                                     let error_code = ErrorCode::None.into();
-                                    let topic_id = row
+
+                                    let topic_id = vtid.or(row
                                         .try_get::<_, Uuid>(0)
                                         .map(|uuid| uuid.into_bytes())
-                                        .map(Some)?;
-                                    let name = row.try_get::<_, String>(1).map(Some)?;
+                                        .map(Some)?);
+
                                     let is_internal = row.try_get::<_, bool>(2).map(Some)?;
                                     let partitions = row.try_get::<_, i32>(3)?;
                                     let replication_factor = row.try_get::<_, i32>(4)?;
@@ -2353,7 +2477,7 @@ impl Storage for Postgres {
 
                                     MetadataResponseTopic::default()
                                         .error_code(error_code)
-                                        .name(name)
+                                        .name(Some(name.to_owned()))
                                         .topic_id(topic_id)
                                         .is_internal(is_internal)
                                         .partitions(partitions)
@@ -2385,7 +2509,7 @@ impl Storage for Postgres {
                             match self
                                 .prepare_query_one(
                                     &c,
-                                    "topic_select_uuid.sql",
+                                    "pg/topic_select_uuid.sql",
                                     &[&self.cluster, &id],
                                 )
                                 .await
@@ -2658,6 +2782,8 @@ impl Storage for Postgres {
             Vec::with_capacity(topics.map(|topics| topics.len()).unwrap_or_default());
 
         for topic in topics.unwrap_or_default() {
+            debug!(?topic);
+
             responses.push(match topic {
                 TopicId::Name(name) => {
                     match self
@@ -3042,8 +3168,9 @@ impl Storage for Postgres {
                 .inspect(|version| debug!(?version))?;
 
             let value = row.try_get::<_, Value>(1)?;
-            let current =
-                serde_json::from_value::<GroupDetail>(value).inspect(|current| debug!(?current))?;
+            let current = serde_json::from_value::<GroupDetail>(value)
+                .inspect(|current| debug!(?current))
+                .map(Box::new)?;
 
             Err(UpdateError::Outdated { current, version })
         };
@@ -3531,6 +3658,82 @@ impl Storage for Postgres {
         Ok(())
     }
 
+    async fn delete_user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<()> {
+        let c = self.connection().await?;
+
+        self.prepare_execute(
+            &c,
+            "scram_credential_delete.sql",
+            &[&self.cluster, &user, &i32::from(mechanism)],
+        )
+        .await
+        .inspect_err(|err| error!(?err, ?user, ?mechanism,))
+        .and(Ok(()))
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        username: &str,
+        mechanism: ScramMechanism,
+        credential: ScramCredential,
+    ) -> Result<()> {
+        let c = self.connection().await?;
+
+        self.prepare_execute(
+            &c,
+            "scram_credential_insert.sql",
+            &[
+                &self.cluster,
+                &username,
+                &i32::from(mechanism),
+                &&credential.salt[..],
+                &credential.iterations,
+                &&credential.stored_key[..],
+                &&credential.server_key[..],
+            ],
+        )
+        .await
+        .inspect_err(|err| error!(?err, ?username, ?mechanism,))
+        .and(Ok(()))
+    }
+
+    async fn user_scram_credential(
+        &self,
+        user: &str,
+        mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        let c = self.connection().await?;
+
+        self.prepare_query_opt(
+            &c,
+            "scram_credential_select.sql",
+            &[&self.cluster, &user, &i32::from(mechanism)],
+        )
+        .await
+        .and_then(|maybe| {
+            if let Some(row) = maybe {
+                let salt = row.try_get::<_, &[u8]>(0).map(Bytes::copy_from_slice)?;
+                let iterations = row.try_get::<_, i32>(1)?;
+                let stored_key = row.try_get::<_, &[u8]>(2).map(Bytes::copy_from_slice)?;
+                let server_key = row.try_get::<_, &[u8]>(3).map(Bytes::copy_from_slice)?;
+
+                Ok(Some(ScramCredential {
+                    salt,
+                    iterations,
+                    stored_key,
+                    server_key,
+                }))
+            } else {
+                Ok(None)
+            }
+        })
+        .inspect_err(|err| error!(?err, ?user, ?mechanism,))
+    }
+
     async fn cluster_id(&self) -> Result<String> {
         Ok(self.cluster.clone())
     }
@@ -3572,3 +3775,118 @@ static SQL_ERROR: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .with_description("The SQL error count")
         .build()
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::distr::Alphanumeric;
+    use tansu_sans_io::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
+
+    // mirrors tansu-broker/tests/common/mod.rs storage_container(StorageType::Postgres)
+    const CONNECTION: &str = "postgres://postgres:postgres@localhost";
+
+    fn alphanumeric_string(length: usize) -> String {
+        rng()
+            .sample_iter(&Alphanumeric)
+            .take(length)
+            .map(char::from)
+            .collect()
+    }
+
+    /// An open (uncommitted) transaction must pin the read_committed last stable
+    /// offset below the high watermark. Regressed when `offset_stage` read the
+    /// high-watermark column instead of the stable-offset column, so
+    /// `read_committed` consumers saw uncommitted records.
+    #[tokio::test]
+    async fn read_committed_last_stable_offset_pinned_by_open_transaction() -> Result<()> {
+        let cluster = alphanumeric_string(15);
+
+        let storage = Postgres::builder(CONNECTION)?
+            .cluster(cluster.as_str())
+            .node(rng().random_range(0..i32::MAX))
+            .build();
+
+        // Probe connectivity explicitly: only a genuinely unreachable postgres
+        // should skip. Any later schema/query error must fail the test.
+        if let Err(err) = storage.connection().await {
+            eprintln!(
+                "skipping read_committed_last_stable_offset_pinned_by_open_transaction: {err:?}"
+            );
+            return Ok(());
+        }
+
+        storage
+            .register_broker(BrokerRegistrationRequest {
+                broker_id: 111,
+                cluster_id: cluster.clone(),
+                incarnation_id: Uuid::now_v7(),
+                rack: None,
+            })
+            .await?;
+
+        let topic_name = alphanumeric_string(15);
+        let num_partitions = 1;
+
+        _ = storage
+            .create_topic(
+                CreatableTopic::default()
+                    .name(topic_name.clone())
+                    .num_partitions(num_partitions)
+                    .replication_factor(0)
+                    .assignments(Some([].into()))
+                    .configs(Some([].into())),
+                false,
+            )
+            .await?;
+
+        let topition = Topition::new(topic_name.clone(), 0);
+
+        // a transactional producer begins a transaction and produces, never commits
+        let transaction_id = alphanumeric_string(10);
+        let producer = storage
+            .init_producer(Some(transaction_id.as_str()), 10_000, Some(-1), Some(-1))
+            .await?;
+
+        _ = storage
+            .txn_add_partitions(TxnAddPartitionsRequest::VersionZeroToThree {
+                transaction_id: transaction_id.clone(),
+                producer_id: producer.id,
+                producer_epoch: producer.epoch,
+                topics: vec![
+                    AddPartitionsToTxnTopic::default()
+                        .name(topic_name.clone())
+                        .partitions(Some((0..num_partitions).collect())),
+                ],
+            })
+            .await?;
+
+        let batch = Batch::builder()
+            .record(Record::builder().value(Bytes::from_static(b"uncommitted").into()))
+            .attributes(BatchAttribute::default().transaction(true).into())
+            .producer_id(producer.id)
+            .producer_epoch(producer.epoch)
+            .base_sequence(0)
+            .build()
+            .and_then(TryInto::try_into)?;
+
+        _ = storage
+            .produce(Some(transaction_id.as_str()), &topition, batch)
+            .await?;
+
+        let stage = storage.offset_stage(&topition).await?;
+
+        assert!(
+            stage.high_watermark > 0,
+            "the uncommitted record should advance the high watermark"
+        );
+        assert!(
+            stage.last_stable < stage.high_watermark,
+            "an open transaction must pin last_stable below the high watermark \
+             (last_stable={}, high_watermark={})",
+            stage.last_stable,
+            stage.high_watermark,
+        );
+
+        Ok(())
+    }
+}

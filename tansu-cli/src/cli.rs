@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,6 +34,7 @@ mod generator;
 mod perf;
 mod proxy;
 mod topic;
+mod user;
 
 const DEFAULT_BROKER: &str = "tcp://localhost:9092";
 
@@ -111,6 +112,12 @@ enum Command {
         #[command(subcommand)]
         command: topic::Command,
     },
+
+    /// Create, list or delete users managed by the broker
+    User {
+        #[command(subcommand)]
+        command: user::Command,
+    },
 }
 
 impl Cli {
@@ -138,6 +145,7 @@ impl Cli {
             .await
             .map_err(Into::into),
             Command::Topic { command } => command.main().await,
+            Command::User { command } => command.main().await,
         }
     }
 }

@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, Instant};
+use std::{cmp::min, time::SystemTime};
 
 use rama::{Context, Service};
 use tansu_sans_io::{
@@ -24,7 +24,7 @@ use tansu_sans_io::{
     metadata_response::MetadataResponseTopic,
     record::deflated::{Batch, Frame},
 };
-use tokio::time::sleep;
+use tokio::time::{Duration, Instant, sleep};
 use tracing::{debug, error, instrument};
 
 use crate::{Error, Result, Storage, Topition};
@@ -126,10 +126,11 @@ impl ApiKey for FetchService {
 
 impl FetchService {
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self,ctx,min_bytes,isolation,fetch_partition), fields(partition = fetch_partition.partition))]
     async fn fetch_partition<G>(
         &self,
-        ctx: Context<G>,
-        max_wait_ms: Duration,
+        ctx: &Context<G>,
+        max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
         isolation: IsolationLevel,
@@ -139,13 +140,7 @@ impl FetchService {
     where
         G: Storage,
     {
-        debug!(
-            ?max_wait_ms,
-            ?min_bytes,
-            ?max_bytes,
-            ?isolation,
-            ?fetch_partition
-        );
+        let started_at = Instant::now();
 
         let partition_index = fetch_partition.partition;
         let tp = Topition::new(topic, partition_index);
@@ -163,7 +158,14 @@ impl FetchService {
 
             let mut fetched = ctx
                 .state()
-                .fetch(&tp, offset, min_bytes, *max_bytes, isolation)
+                .fetch(
+                    &tp,
+                    offset,
+                    min_bytes,
+                    *max_bytes,
+                    isolation,
+                    max_wait.saturating_sub(started_at.elapsed()),
+                )
                 .await
                 .inspect(|r| debug!(?tp, ?offset, ?r))
                 .inspect_err(|error| error!(?tp, ?error))?;
@@ -171,18 +173,22 @@ impl FetchService {
             *max_bytes =
                 u32::try_from(fetched.byte_size()).map(|bytes| max_bytes.saturating_sub(bytes))?;
 
-            offset += fetched
-                .iter()
-                .map(|batch| batch.record_count as i64)
-                .sum::<i64>();
-
-            debug!(?offset, ?fetched);
+            debug!(?offset, ?fetched, max_bytes);
 
             if fetched.is_empty() || fetched.first().is_some_and(|batch| batch.record_count == 0) {
                 break;
-            } else {
-                batches.append(&mut fetched);
             }
+
+            if let Some(latest) = fetched
+                .iter()
+                .map(|batch| batch.base_offset + batch.record_count as i64)
+                .max()
+                .inspect(|latest| debug!(latest))
+            {
+                offset = latest;
+            }
+
+            batches.append(&mut fetched);
         }
 
         let offset_stage = ctx
@@ -207,7 +213,7 @@ impl FetchService {
             } else {
                 Some(Frame { batches })
             }))
-        .inspect(|r| debug!(?r))
+        .inspect(|r| debug!(?r, elapsed = ?started_at.elapsed()))
     }
 
     fn unknown_topic_response(&self, fetch: &FetchTopic) -> Result<FetchableTopicResponse> {
@@ -240,20 +246,21 @@ impl FetchService {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, ctx, min_bytes, isolation, fetch))]
     async fn fetch_topic<G>(
         &self,
-        ctx: Context<G>,
-        max_wait_ms: Duration,
+        ctx: &Context<G>,
+        max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
         isolation: IsolationLevel,
         fetch: &FetchTopic,
-        _is_first: bool,
+        is_first_non_empty: &mut bool,
     ) -> Result<FetchableTopicResponse>
     where
         G: Storage,
     {
-        debug!(?max_wait_ms, ?min_bytes, ?isolation, ?fetch);
+        let started_at = Instant::now();
 
         let metadata = ctx.state().metadata(Some(&[fetch.into()])).await?;
 
@@ -266,17 +273,39 @@ impl FetchService {
             let mut partitions = Vec::new();
 
             for fetch_partition in fetch.partitions.as_ref().unwrap_or(&Vec::new()) {
+                let partition_max_bytes = if *is_first_non_empty {
+                    *max_bytes
+                } else {
+                    min(fetch_partition.partition_max_bytes as u32, *max_bytes)
+                };
+
+                let mut partition_bytes = partition_max_bytes;
+                debug!(partition_bytes, is_first_non_empty);
+
+                let remaining = max_wait.saturating_sub(started_at.elapsed());
+
                 let partition = self
                     .fetch_partition(
-                        ctx.clone(),
-                        max_wait_ms,
+                        ctx,
+                        remaining,
                         min_bytes,
-                        max_bytes,
+                        &mut partition_bytes,
                         isolation,
                         name,
                         fetch_partition,
                     )
                     .await?;
+
+                *is_first_non_empty = *is_first_non_empty
+                    && partition
+                        .records
+                        .as_ref()
+                        .is_some_and(|records| records.batches.is_empty());
+
+                debug!(partition_bytes, is_first_non_empty);
+
+                *max_bytes =
+                    max_bytes.saturating_sub(partition_max_bytes.saturating_sub(partition_bytes));
 
                 partitions.push(partition);
             }
@@ -290,9 +319,10 @@ impl FetchService {
         }
     }
 
+    #[instrument(skip(self, ctx, isolation, topics))]
     pub(crate) async fn fetch<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         max_wait: Duration,
         min_bytes: u32,
         max_bytes: &mut u32,
@@ -302,33 +332,33 @@ impl FetchService {
     where
         G: Storage,
     {
-        debug!(?max_wait, ?min_bytes, ?isolation, ?topics);
+        debug!(?isolation, ?topics);
 
         if topics.is_empty() {
             Ok(vec![])
         } else {
-            let start = Instant::now();
+            let started_at = SystemTime::now();
             let mut responses = vec![];
             let mut iteration = 0;
-            let mut elapsed = Duration::from_millis(0);
             let mut bytes = 0;
+            let mut is_first_non_empty = true;
 
-            while elapsed <= max_wait && bytes <= min_bytes {
-                debug!(?elapsed, ?max_wait, ?bytes, ?min_bytes);
+            while !max_wait.saturating_sub(started_at.elapsed()?).is_zero() && bytes <= min_bytes {
+                debug!(?bytes, remaining = ?max_wait.saturating_sub(started_at.elapsed()?));
 
-                let enumerate = topics.iter().enumerate();
                 responses.clear();
 
-                for (i, fetch) in enumerate {
+                let fetch_started_at = SystemTime::now();
+                for fetch in topics.iter() {
                     let fetch_response = self
                         .fetch_topic(
-                            ctx.clone(),
-                            max_wait,
+                            ctx,
+                            max_wait.saturating_sub(started_at.elapsed()?),
                             min_bytes,
                             max_bytes,
                             isolation,
                             fetch,
-                            i == 0,
+                            &mut is_first_non_empty,
                         )
                         .await?;
 
@@ -337,25 +367,27 @@ impl FetchService {
 
                 bytes += u32::try_from(responses.byte_size())?;
 
-                let now = Instant::now();
-                elapsed = now.duration_since(start);
-                let remaining = max_wait.saturating_sub(elapsed);
+                let remaining = max_wait.saturating_sub(started_at.elapsed()?);
 
-                debug!(
-                    ?iteration,
-                    ?max_wait,
-                    ?elapsed,
-                    ?remaining,
-                    ?bytes,
-                    ?min_bytes
-                );
+                debug!(?iteration, ?max_wait, ?remaining, ?bytes, ?min_bytes);
 
-                sleep(if remaining.as_millis() >= 250 {
-                    remaining / 2
-                } else {
-                    remaining
-                })
-                .await;
+                if bytes > min_bytes {
+                    break;
+                }
+
+                {
+                    let fetch_elapsed = fetch_started_at.elapsed()?;
+
+                    // we have some data to return to the client,
+                    // we haven't met the minimum size requirement,
+                    // but we don't have enough (estimated) time remaining to do another round
+                    if !responses.is_empty() && remaining < fetch_elapsed {
+                        debug!(responses.len = responses.len(), ?remaining, ?fetch_elapsed);
+                        break;
+                    }
+                }
+
+                sleep(remaining / 2).await;
 
                 iteration += 1;
             }
@@ -378,6 +410,8 @@ where
         ctx: Context<G>,
         req: FetchRequest,
     ) -> Result<Self::Response, Self::Error> {
+        let started_at = SystemTime::now();
+
         let responses = Some(if let Some(topics) = req.topics {
             let isolation_level = req
                 .isolation_level
@@ -396,7 +430,7 @@ where
             })?;
 
             self.fetch(
-                ctx,
+                &ctx,
                 max_wait_ms,
                 min_bytes,
                 &mut max_bytes,
@@ -414,7 +448,7 @@ where
             .session_id(Some(0))
             .node_endpoints(Some([].into()))
             .responses(responses))
-        .inspect(|r| debug!(?r))
+        .inspect(|r| debug!(?r, elapsed = ?started_at.elapsed().ok()))
     }
 }
 

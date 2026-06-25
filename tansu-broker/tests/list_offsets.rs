@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ use tansu_service::{
     BytesFrameLayer, BytesFrameService, BytesLayer, BytesService, FrameBytesLayer,
     FrameBytesService, FrameRouteService, RequestFrameLayer, RequestFrameService,
 };
-use tansu_storage::{Storage, StorageContainer, Topition};
+use tansu_storage::{Storage, Topition};
 use tokio::time::sleep;
 use tracing::debug;
 use url::Url;
@@ -46,7 +46,7 @@ type Broker = RequestFrameService<
 
 fn broker<S>(storage: S) -> Result<Broker>
 where
-    S: Storage,
+    S: Storage + Clone,
 {
     storage::services(FrameRouteService::<(), Error>::builder(), storage)
         .inspect(|builder| debug!(?builder))
@@ -56,7 +56,7 @@ where
                 RequestFrameLayer,
                 FrameBytesLayer,
                 BytesLayer,
-                BytesFrameLayer,
+                BytesFrameLayer::default(),
             )
                 .into_layer(frame_route)
         })
@@ -551,11 +551,10 @@ pub async fn multiple_record(broker: Broker) -> Result<()> {
     Ok(())
 }
 
-pub async fn new_topic(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+pub async fn new_topic<G>(cluster_id: impl Into<String>, broker_id: i32, sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
@@ -647,11 +646,10 @@ pub async fn new_topic(
     Ok(())
 }
 
-pub async fn single_record(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+pub async fn single_record<G>(cluster_id: impl Into<String>, broker_id: i32, sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
@@ -743,9 +741,14 @@ pub async fn single_record(
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -803,9 +806,14 @@ mod pg {
 
 #[cfg(feature = "dynostore")]
 mod in_memory {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
@@ -863,9 +871,14 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Lite,
             cluster,
@@ -923,9 +936,14 @@ mod lite {
 
 #[cfg(feature = "slatedb")]
 mod slatedb {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::SlateDb,
             cluster,

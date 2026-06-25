@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -23,4 +23,18 @@ join topic t on t.cluster = c.id
 where
 
 c.name = $1
-and t.uuid = $2;
+and t.uuid = $2
+
+union
+
+select vt.uuid, t.name || '/' || vt.k, t.is_internal, t.partitions, t.replication_factor
+
+from
+cluster c
+join topic t on t.cluster = c.id
+join virtual_topic vt on vt.topic = t.id
+
+where
+
+c.name = $1
+and vt.uuid = $2

@@ -116,9 +116,12 @@
 //! and whether any tagged fields can be present for a particular message version. Serializers
 //! map from the [Serde Data Model](https://serde.rs/data-model.html) to the Kafka protocol or vice versa.
 
+pub mod acl;
+pub mod consumer;
 pub mod de;
 pub mod primitive;
 pub mod record;
+pub mod resource;
 pub mod ser;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut, TryGetError};
@@ -133,11 +136,12 @@ use std::{
     collections::HashMap,
     env::VarError,
     fmt::{self, Display, Formatter},
-    io::{self, BufRead, Cursor, Read, Write},
+    io::{self, BufRead, Cursor, Read},
     num,
     process::{ExitCode, Termination},
-    str, string,
-    sync::{Arc, OnceLock},
+    str::{self, FromStr},
+    string,
+    sync::{Arc, OnceLock, PoisonError},
     time::{Duration, SystemTime, SystemTimeError},
 };
 use tansu_model::{MessageKind, MessageMeta};
@@ -146,6 +150,107 @@ use tracing_subscriber::filter::ParseError;
 
 /// The null topic identifier.
 pub const NULL_TOPIC_ID: [u8; 16] = [0; 16];
+
+pub trait ByteSize {
+    fn size_in_bytes(&self) -> Result<usize>;
+}
+
+pub trait MaximumAllocationSize {
+    fn maximum_allocation_size(&self) -> Result<usize>;
+}
+
+impl<T> MaximumAllocationSize for T
+where
+    T: ByteSize,
+{
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        self.size_in_bytes()
+    }
+}
+
+impl MaximumAllocationSize for Bytes {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i32>() + self.len())
+    }
+}
+
+impl MaximumAllocationSize for f64 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<f64>())
+    }
+}
+
+impl MaximumAllocationSize for i16 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i16>())
+    }
+}
+
+impl MaximumAllocationSize for i32 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i32>())
+    }
+}
+
+impl MaximumAllocationSize for i64 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i64>())
+    }
+}
+
+impl MaximumAllocationSize for bool {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<bool>())
+    }
+}
+
+impl MaximumAllocationSize for i8 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i8>())
+    }
+}
+
+impl MaximumAllocationSize for String {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<i16>() + self.len())
+    }
+}
+
+impl MaximumAllocationSize for u16 {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<u16>())
+    }
+}
+
+impl MaximumAllocationSize for [u8; 16] {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(size_of::<u8>() * 16)
+    }
+}
+
+impl<T> MaximumAllocationSize for Vec<T>
+where
+    T: MaximumAllocationSize,
+{
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        self.iter()
+            .map(MaximumAllocationSize::maximum_allocation_size)
+            .collect::<Result<Vec<_>>>()
+            .map(|elements| size_of::<i32>() + elements.iter().sum::<usize>())
+    }
+}
+
+impl<T> MaximumAllocationSize for Option<T>
+where
+    T: MaximumAllocationSize,
+{
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        self.as_ref().map_or(
+            Ok(size_of::<i32>()),
+            MaximumAllocationSize::maximum_allocation_size,
+        )
+    }
+}
 
 #[derive(Debug)]
 pub struct RootMessageMeta {
@@ -216,23 +321,32 @@ pub trait Response:
     type Request: Request;
 }
 
+pub trait IntoVersion {
+    fn into_version(self, api_version: i16) -> Self;
+}
+
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     ApiError(ErrorCode),
     EnvVar(VarError),
     FromUtf8(string::FromUtf8Error),
     InvalidAckValue(i16),
+    InvalidConsumerProtocolSubscriptionVersion(i16),
     InvalidCoordinatorType(i8),
     InvalidIsolationLevel(i8),
     InvalidOpType(i8),
+    InvalidScramMechanism(i8),
     Io(Arc<io::Error>),
     Message(String),
     MessageMaxSizeExceeded(usize),
     NoSuchField(&'static str),
     NoSuchMessage(&'static str),
     NoSuchRequest(i16),
+    NotAuthenticated,
     Overflow,
     ParseFilter(Arc<ParseError>),
+    ParseScram(String),
+    Poison,
     ResponseFrame,
     Snap(#[from] snap::Error),
     StringWithoutApiVersion,
@@ -244,7 +358,9 @@ pub enum Error {
     TryGet(Arc<TryGetError>),
     UnexpectedType(String),
     UnknownApiErrorCode(i16),
+    UnknownAssignor(String),
     UnknownCompressionType(i16),
+    UnknownScramMechanism(i8),
     UnknownContainer,
     Utf8(str::Utf8Error),
 }
@@ -257,6 +373,12 @@ impl Display for Error {
             Error::Message(e) => f.write_str(e),
             e => write!(f, "{e:?}"),
         }
+    }
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(_value: PoisonError<T>) -> Self {
+        Self::Poison
     }
 }
 
@@ -406,6 +528,34 @@ pub struct Frame {
     pub body: Body,
 }
 
+impl IntoVersion for Frame {
+    fn into_version(self, api_version: i16) -> Self {
+        Self {
+            header: self.header.into_version(api_version),
+            body: self.body.into_version(api_version),
+            ..self
+        }
+    }
+}
+
+impl MaximumAllocationSize for Frame {
+    #[instrument(skip_all, ret)]
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        Ok(self.size.maximum_allocation_size()?
+            + self.header.maximum_allocation_size()?
+            + self.body.maximum_allocation_size()?)
+    }
+}
+
+fn fix_length(mut encoded: BytesMut) -> Result<Bytes> {
+    let mut sz = encoded.split_to(size_of::<i32>());
+    sz.clear();
+    sz.put_i32(i32::try_from(encoded.len())?);
+    sz.unsplit(encoded);
+    sz.truncate(sz.len());
+    Ok(sz.freeze())
+}
+
 impl Frame {
     fn elapsed_millis(start: SystemTime) -> u64 {
         start
@@ -416,31 +566,23 @@ impl Frame {
     /// serialize an API request into a frame of bytes
     #[instrument(skip_all)]
     pub fn request(header: Header, body: Body) -> Result<Bytes> {
-        let start = SystemTime::now();
-
-        let mut c = Cursor::new(vec![]);
-
-        let mut serializer = Encoder::request(&mut c);
+        let Header::Request { api_version, .. } = header else {
+            return Err(Error::ResponseFrame);
+        };
 
         let frame = Frame {
             size: 0,
-            header,
-            body,
+            header: header.into_version(api_version),
+            body: body.into_version(api_version),
         };
 
+        let mut serializer = Encoder::request(
+            frame
+                .maximum_allocation_size()
+                .map(BytesMut::with_capacity)?,
+        );
         frame.serialize(&mut serializer)?;
-        let size = i32::try_from(c.position()).map(|position| position - 4)?;
-
-        c.set_position(0);
-        let buf = size.to_be_bytes();
-        c.write_all(&buf)?;
-
-        Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
-            debug!(
-                len = encoded.len(),
-                elapsed_millis = Self::elapsed_millis(start)
-            )
-        })
+        fix_length(BytesMut::from(serializer)).inspect(|encoded| debug!(encoded = ?&encoded[..]))
     }
 
     /// deserialize bytes into an API request frame
@@ -451,41 +593,27 @@ impl Frame {
         let mut reader = encoded.reader();
         let mut deserializer = Decoder::request(&mut reader);
         Frame::deserialize(&mut deserializer)
-            .inspect(|_frame| debug!(elapsed_millis = Self::elapsed_millis(start)))
+            .inspect(|frame| debug!(?frame, elapsed_millis = Self::elapsed_millis(start)))
     }
 
     /// serialize an API response into a frame of bytes
-    #[instrument(skip_all)]
+    #[instrument(skip(header, body))]
     pub fn response(header: Header, body: Body, api_key: i16, api_version: i16) -> Result<Bytes> {
-        let start = SystemTime::now();
-
-        let mut c = Cursor::new(vec![]);
-        let mut serializer = Encoder::response(&mut c, api_key, api_version);
-
         let frame = Frame {
             size: 0,
-            header,
-            body,
+            header: header.into_version(api_version),
+            body: body.into_version(api_version),
         };
 
-        frame.serialize(&mut serializer)?;
-        let size = i32::try_from(c.position())
-            .map(|position| position - 4)
-            .inspect_err(|err| {
-                let position = c.position();
-                warn!(?err, ?position, ?frame);
-            })?;
-
-        c.set_position(0);
-        let buf = size.to_be_bytes();
-        c.write_all(&buf)?;
-
-        Ok(Bytes::from(c.into_inner())).inspect(|encoded| {
-            debug!(
-                len = encoded.len(),
-                elapsed_millis = Self::elapsed_millis(start)
-            )
-        })
+        let mut encoder = Encoder::response(
+            frame
+                .maximum_allocation_size()
+                .map(BytesMut::with_capacity)?,
+            api_key,
+            api_version,
+        );
+        frame.serialize(&mut encoder)?;
+        fix_length(BytesMut::from(encoder)).inspect(|encoded| debug!(encoded = ?&encoded[..]))
     }
 
     /// deserialize bytes into an API response frame
@@ -539,6 +667,14 @@ impl Frame {
             Err(Error::ResponseFrame)
         }
     }
+
+    pub fn is_request(&self) -> bool {
+        matches!(self.header, Header::Request { .. })
+    }
+
+    pub fn is_response(&self) -> bool {
+        matches!(self.header, Header::Response { .. })
+    }
 }
 
 /// A Kafka API request or response header.
@@ -566,6 +702,29 @@ pub enum Header {
         /// The correlation ID for the corresponding request.
         correlation_id: i32,
     },
+}
+
+impl IntoVersion for Header {
+    fn into_version(self, _api_version: i16) -> Self {
+        self
+    }
+}
+
+impl MaximumAllocationSize for Header {
+    fn maximum_allocation_size(&self) -> Result<usize> {
+        match self {
+            Self::Request {
+                api_key,
+                api_version,
+                correlation_id,
+                client_id,
+            } => Ok(api_key.maximum_allocation_size()?
+                + api_version.maximum_allocation_size()?
+                + correlation_id.maximum_allocation_size()?
+                + client_id.maximum_allocation_size()?),
+            Self::Response { correlation_id } => correlation_id.maximum_allocation_size(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
@@ -1697,6 +1856,12 @@ pub struct ControlBatch {
     pub r#type: i16,
 }
 
+impl ByteSize for ControlBatch {
+    fn size_in_bytes(&self) -> Result<usize> {
+        Ok(size_of_val(&self.version) + size_of_val(&self.r#type))
+    }
+}
+
 impl ControlBatch {
     const ABORT: i16 = 0;
     const COMMIT: i16 = 1;
@@ -1742,10 +1907,10 @@ impl TryFrom<ControlBatch> for Bytes {
     type Error = Error;
 
     fn try_from(value: ControlBatch) -> Result<Self, Self::Error> {
-        let mut b = BytesMut::new().writer();
-        let mut serializer = Encoder::new(&mut b);
-        value.serialize(&mut serializer)?;
-        Ok(Bytes::from(b.into_inner()))
+        let mut encoder = Encoder::new(BytesMut::with_capacity(value.size_in_bytes()?));
+        value.serialize(&mut encoder)?;
+
+        Ok(Bytes::from(encoder))
     }
 }
 
@@ -1754,6 +1919,12 @@ impl TryFrom<ControlBatch> for Bytes {
 pub struct EndTransactionMarker {
     pub version: i16,
     pub coordinator_epoch: i32,
+}
+
+impl ByteSize for EndTransactionMarker {
+    fn size_in_bytes(&self) -> Result<usize> {
+        Ok(size_of_val(&self.version) + size_of_val(&self.coordinator_epoch))
+    }
 }
 
 impl TryFrom<Bytes> for EndTransactionMarker {
@@ -1770,15 +1941,16 @@ impl TryFrom<EndTransactionMarker> for Bytes {
     type Error = Error;
 
     fn try_from(value: EndTransactionMarker) -> Result<Self, Self::Error> {
-        let mut b = BytesMut::new().writer();
-        let mut serializer = Encoder::new(&mut b);
-        value.serialize(&mut serializer)?;
-        Ok(Bytes::from(b.into_inner()))
+        let mut encoder = Encoder::new(BytesMut::with_capacity(value.size_in_bytes()?));
+        value.serialize(&mut encoder)?;
+        Ok(Bytes::from(encoder))
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 /// The endpoint type.
 pub enum EndpointType {
+    #[default]
     Unknown,
     Broker,
     Controller,
@@ -2069,6 +2241,54 @@ impl TryFrom<i64> for ListOffset {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ScramMechanism {
+    Scram256,
+    Scram512,
+}
+
+impl FromStr for ScramMechanism {
+    type Err = Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "SCRAM-SHA-256" => Ok(ScramMechanism::Scram256),
+            "SCRAM-SHA-512" => Ok(ScramMechanism::Scram512),
+            otherwise => Err(Error::ParseScram(otherwise.to_string())),
+        }
+    }
+}
+
+impl TryFrom<i8> for ScramMechanism {
+    type Error = Error;
+
+    fn try_from(value: i8) -> std::result::Result<Self, Self::Error> {
+        match value {
+            1 => Ok(ScramMechanism::Scram256),
+            2 => Ok(ScramMechanism::Scram512),
+            otherwise => Err(Error::UnknownScramMechanism(value)),
+        }
+    }
+}
+
+impl From<ScramMechanism> for i32 {
+    fn from(value: ScramMechanism) -> Self {
+        match value {
+            ScramMechanism::Scram256 => 1,
+            ScramMechanism::Scram512 => 2,
+        }
+    }
+}
+
+impl From<ScramMechanism> for i8 {
+    fn from(value: ScramMechanism) -> Self {
+        match value {
+            ScramMechanism::Scram256 => 1,
+            ScramMechanism::Scram512 => 2,
+        }
+    }
+}
+
 pub trait Encode {
     fn encode(&self) -> Result<Bytes>;
 }
@@ -2125,6 +2345,28 @@ mod tests {
             64,
             i16::from(BatchAttribute::default().delete_horizon(true))
         );
+    }
+
+    #[test]
+    fn reset_compression() -> Result<()> {
+        let mut attribute: i16 = BatchAttribute::default()
+            .compression(Compression::Gzip)
+            .into();
+
+        assert_eq!(
+            Compression::Gzip,
+            BatchAttribute::try_from(attribute).map(|attribute| attribute.compression)?
+        );
+
+        attribute = BatchAttribute::try_from(attribute)
+            .map(|attribute| attribute.compression(Compression::None).into())?;
+
+        assert_eq!(
+            Compression::None,
+            BatchAttribute::try_from(attribute).map(|attribute| attribute.compression)?
+        );
+
+        Ok(())
     }
 }
 

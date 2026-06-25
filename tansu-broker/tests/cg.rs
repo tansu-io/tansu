@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,18 +18,17 @@ use common::{StorageType, alphanumeric_string, init_tracing, register_broker};
 use rand::{prelude::*, rng};
 use tansu_broker::Result;
 use tansu_sans_io::{ErrorCode, create_topics_request::CreatableTopic};
-use tansu_storage::{OffsetCommitRequest, Storage, StorageContainer, Topition};
+use tansu_storage::{OffsetCommitRequest, Storage, Topition};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;
 
 pub mod common;
 
-pub async fn offset_commit(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+pub async fn offset_commit<G>(cluster_id: impl Into<String>, broker_id: i32, sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
@@ -91,11 +90,14 @@ pub async fn offset_commit(
     Ok(())
 }
 
-pub async fn topic_delete_cascade_to_offset_commit(
+pub async fn topic_delete_cascade_to_offset_commit<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
@@ -157,11 +159,14 @@ pub async fn topic_delete_cascade_to_offset_commit(
     Ok(())
 }
 
-pub async fn consumer_group_delete_cascade_to_offset_commit(
+pub async fn consumer_group_delete_cascade_to_offset_commit<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
@@ -226,11 +231,14 @@ pub async fn consumer_group_delete_cascade_to_offset_commit(
     Ok(())
 }
 
-pub async fn delete_unknown_consumer_group(
+pub async fn delete_unknown_consumer_group<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let group_id: String = alphanumeric_string(15);
@@ -246,11 +254,14 @@ pub async fn delete_unknown_consumer_group(
     Ok(())
 }
 
-pub async fn offset_commit_unknown_topition(
+pub async fn offset_commit_unknown_topition<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
@@ -291,11 +302,14 @@ pub async fn offset_commit_unknown_topition(
     Ok(())
 }
 
-pub async fn offset_fetch_unknown_topition(
+pub async fn offset_fetch_unknown_topition<G>(
     cluster_id: impl Into<String>,
     broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let topic_name: String = alphanumeric_string(15);
@@ -320,11 +334,10 @@ pub async fn offset_fetch_unknown_topition(
     Ok(())
 }
 
-pub async fn list_groups_none(
-    cluster_id: impl Into<String>,
-    broker_id: i32,
-    sc: StorageContainer,
-) -> Result<()> {
+pub async fn list_groups_none<G>(cluster_id: impl Into<String>, broker_id: i32, sc: G) -> Result<()>
+where
+    G: Storage + Clone,
+{
     register_broker(cluster_id, broker_id, &sc).await?;
 
     let groups = sc.list_groups(None).await?;
@@ -335,9 +348,14 @@ pub async fn list_groups_none(
 
 #[cfg(feature = "postgres")]
 mod pg {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Postgres,
             cluster,
@@ -456,9 +474,14 @@ mod pg {
 
 #[cfg(feature = "dynostore")]
 mod in_memory {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::InMemory,
             cluster,
@@ -578,9 +601,14 @@ mod in_memory {
 
 #[cfg(feature = "libsql")]
 mod lite {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::Lite,
             cluster,
@@ -700,9 +728,14 @@ mod lite {
 
 #[cfg(feature = "slatedb")]
 mod slatedb {
+    use std::sync::Arc;
+
     use super::*;
 
-    async fn storage_container(cluster: impl Into<String>, node: i32) -> Result<StorageContainer> {
+    async fn storage_container(
+        cluster: impl Into<String> + Clone,
+        node: i32,
+    ) -> Result<Arc<Box<dyn Storage>>> {
         common::storage_container(
             StorageType::SlateDb,
             cluster,

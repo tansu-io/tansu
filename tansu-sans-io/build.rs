@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -199,6 +199,29 @@ fn tag_kind(
     }
 }
 
+fn body_into_version(messages: &[Message]) -> TokenStream {
+    let variants = messages
+        .iter()
+        .map(|message| {
+            let name = message.type_name();
+
+            quote! {
+                Self::#name(message) => message.into_version(api_version).into(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    quote! {
+        impl crate::IntoVersion for Body {
+            fn into_version(self, api_version: i16) -> Self {
+                match self {
+                    #(#variants)*
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn body_enum(messages: &[Message], include_tag: bool) -> TokenStream {
     let variants = messages.iter().map(|message| {
@@ -381,6 +404,39 @@ fn root_message_struct(message: &Message, include_tag: bool) -> TokenStream {
     }
 }
 
+fn message_struct_into_version(name: &Type, fields: &[Field]) -> TokenStream {
+    if fields.iter().any(|f| f.tag().is_some()) {
+        let none = fields.iter().filter(|f| f.tag().is_some()).map(|field| {
+            let f = field.ident();
+            let start = field.versions().start;
+            let end = field.versions().end;
+
+            quote! {
+                if !(#start ..= #end).contains(&api_version) {
+                    self.#f = None;
+                }
+            }
+        });
+
+        quote! {
+            impl crate::IntoVersion for #name {
+                fn into_version(mut self, api_version: i16) -> Self {
+                    #(#none)*
+                    self
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl crate::IntoVersion for #name {
+                fn into_version(self, _api_version: i16) -> Self {
+                    self
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn message_struct(
     module: &syn::Path,
@@ -432,6 +488,8 @@ fn message_struct(
         &dependencies,
         include_tag,
     );
+
+    let maximum_allocation_size = maximum_allocation_size(name, fields, include_tag);
 
     if include_tag {
         let tags: Vec<TokenStream> = fields
@@ -569,6 +627,8 @@ fn message_struct(
             }
         };
 
+        let into_version = message_struct_into_version(name, fields);
+
         quote! {
             #[non_exhaustive]
             #derived
@@ -577,6 +637,10 @@ fn message_struct(
             }
 
             #from_mezzanine
+
+            #maximum_allocation_size
+
+            #into_version
 
             impl #name {
                 #(#builders)*
@@ -649,6 +713,8 @@ fn message_struct(
             })
             .collect();
 
+        let tag_capacity = tags.len();
+
         let assignments: Vec<TokenStream> = fields
             .iter()
             .filter(|field| field.tag().is_none())
@@ -687,7 +753,7 @@ fn message_struct(
                 impl From<#tagged_name> for #name {
                     fn from(value: #tagged_name) -> Self {
                         #[allow(unused_mut)]
-                        let mut tag_buffer = Vec::new();
+                        let mut tag_buffer = Vec::with_capacity(#tag_capacity);
 
                         #(#tags)*
 
@@ -724,6 +790,32 @@ fn message_struct(
     }
 }
 
+fn maximum_allocation_size(name: &Type, fields: &[Field], include_tag: bool) -> TokenStream {
+    let sizes = fields
+        .iter()
+        .filter(|field| include_tag || field.tag().is_none())
+        .map(|field| {
+            let f = field.ident();
+
+            quote! {
+                total += self.#f.maximum_allocation_size()?
+            }
+        })
+        .collect::<Vec<_>>();
+
+    quote! {
+        impl crate::MaximumAllocationSize for #name {
+            fn maximum_allocation_size(&self) -> Result<usize, crate::Error> {
+                let mut total:usize = 0;
+
+                #(#sizes;)*
+
+                Ok(total)
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn common_struct(
     parent: Option<&Field>,
@@ -734,6 +826,7 @@ fn common_struct(
 ) -> TokenStream {
     let vis = quote!(pub);
     let vfk = visibility_field_kind(parent, Some(&vis), fields, module, &[], include_tag);
+    let maximum_allocation_size = maximum_allocation_size(name, fields, include_tag);
 
     if include_tag {
         let assignments: Vec<TokenStream> = fields
@@ -811,6 +904,8 @@ fn common_struct(
                 #(#builders)*
             }
 
+            #maximum_allocation_size
+
             impl From<#from> for #name {
                 fn from(value: #from) -> Self {
                     Self {
@@ -878,6 +973,8 @@ fn common_struct(
             })
             .collect();
 
+        let tag_capacity = tags.len();
+
         let assignments: Vec<TokenStream> = fields
             .iter()
             .filter(|field| field.tag().is_none())
@@ -927,7 +1024,7 @@ fn common_struct(
             impl From<#from> for #name {
                 fn from(value: #from) -> Self {
                     #[allow(unused_mut)]
-                    let mut tag_buffer = Vec::new();
+                    let mut tag_buffer = Vec::with_capacity(#tag_capacity);
 
                     #(#tags)*
 
@@ -992,6 +1089,7 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
                             MessageKind::Request => {
                                 assert_eq!(entry.0.replace(message.type_name()), None)
                             }
+
                             MessageKind::Response => {
                                 assert_eq!(entry.1.replace(message.type_name()), None)
                             }
@@ -1080,6 +1178,19 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
             })
             .collect::<Vec<_>>();
 
+        let maximum_allocation_size = messages
+            .iter()
+            .map(|message| {
+                let name = message.type_name();
+
+                quote! {
+                    Self::#name(message) => message.maximum_allocation_size(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let api_versions = body_into_version(messages);
+
         quote! {
             #(#root)*
 
@@ -1104,6 +1215,16 @@ fn process(messages: &[Message], include_tag: bool) -> TokenStream {
                     }
                 }
             }
+
+            impl crate::MaximumAllocationSize for Body {
+                fn maximum_allocation_size(&self) -> Result<usize, crate::Error> {
+                    match self {
+                        #(#maximum_allocation_size)*
+                    }
+                }
+            }
+
+            #api_versions
         }
     } else {
         quote! {

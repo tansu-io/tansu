@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use rama::{Context, Service};
 use tansu_sans_io::{
-    ApiKey, ErrorCode, ProduceRequest, ProduceResponse,
+    ApiKey, BatchAttribute, ErrorCode, ProduceRequest, ProduceResponse, TimestampType,
     produce_request::{PartitionProduceData, TopicProduceData},
     produce_response::{PartitionProduceResponse, TopicProduceResponse},
 };
@@ -149,7 +151,7 @@ impl ProduceService {
     #[instrument(skip_all)]
     async fn partition<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         transaction_id: Option<&str>,
         name: &str,
         partition: PartitionProduceData,
@@ -160,8 +162,21 @@ impl ProduceService {
         if let Some(records) = partition.records {
             let mut base_offset = None;
 
-            for batch in records.batches {
+            for mut batch in records.batches {
                 let tp = Topition::new(name, partition.index);
+
+                if BatchAttribute::try_from(batch.attributes)
+                    .map(|attributes| attributes.timestamp == TimestampType::LogAppendTime)
+                    .unwrap_or_default()
+                {
+                    let base_timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|duration| duration.as_millis() as i64)
+                        .unwrap_or_default();
+
+                    batch.base_timestamp = base_timestamp;
+                    batch.max_timestamp = base_timestamp;
+                }
 
                 match ctx
                     .state()
@@ -209,7 +224,7 @@ impl ProduceService {
     #[instrument(skip_all)]
     async fn topic<G>(
         &self,
-        ctx: Context<G>,
+        ctx: &Context<G>,
         transaction_id: Option<&str>,
         topic: TopicProduceData,
     ) -> TopicProduceResponse
@@ -221,7 +236,7 @@ impl ProduceService {
         if let Some(partition_data) = topic.partition_data {
             for partition in partition_data {
                 partitions.push(
-                    self.partition(ctx.clone(), transaction_id, &topic.name, partition)
+                    self.partition(ctx, transaction_id, &topic.name, partition)
                         .await,
                 )
             }
@@ -255,7 +270,7 @@ where
         if let Some(topics) = req.topic_data {
             for topic in topics {
                 responses.push(
-                    self.topic(ctx.clone(), req.transactional_id.as_deref(), topic)
+                    self.topic(&ctx, req.transactional_id.as_deref(), topic)
                         .await,
                 )
             }

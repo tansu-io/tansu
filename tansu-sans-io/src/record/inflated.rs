@@ -1,4 +1,4 @@
-// Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+// Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,16 +13,16 @@
 // limitations under the License.
 
 use crate::{
-    Compression, Encoder, Error, Result,
-    primitive::ByteSize,
+    BatchAttribute, ByteSize, Compression, Error, Result, TimestampType,
     record::{Record, codec::Sequence, deflated},
+    ser::RecordBatchEncoder,
     to_timestamp,
 };
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tracing::debug;
 
@@ -38,6 +38,19 @@ impl TryFrom<deflated::Frame> for Frame {
         deflated
             .batches
             .into_iter()
+            .map(Batch::try_from)
+            .collect::<Result<Vec<_>>>()
+            .map(|batches| Self { batches })
+    }
+}
+
+impl TryFrom<&deflated::Frame> for Frame {
+    type Error = Error;
+
+    fn try_from(deflated: &deflated::Frame) -> Result<Self, Self::Error> {
+        deflated
+            .batches
+            .iter()
             .try_fold(Vec::new(), |mut acc, batch| {
                 Batch::try_from(batch).map(|inflated| {
                     acc.push(inflated);
@@ -48,7 +61,7 @@ impl TryFrom<deflated::Frame> for Frame {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "deflated::Batch")]
 pub struct Batch {
     pub base_offset: i64,
@@ -68,6 +81,36 @@ pub struct Batch {
     pub records: Vec<Record>,
 }
 
+const MAGIC: i8 = 2;
+
+impl Default for Batch {
+    fn default() -> Self {
+        let base_timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or_default();
+
+        Self {
+            base_offset: 0,
+            batch_length: Default::default(),
+            partition_leader_epoch: -1,
+            magic: MAGIC,
+            crc: Default::default(),
+            attributes: BatchAttribute::default()
+                .compression(Compression::None)
+                .timestamp(TimestampType::CreateTime)
+                .into(),
+            last_offset_delta: Default::default(),
+            base_timestamp,
+            max_timestamp: base_timestamp,
+            producer_id: -1,
+            producer_epoch: -1,
+            base_sequence: -1,
+            records: Default::default(),
+        }
+    }
+}
+
 impl TryFrom<deflated::Batch> for Batch {
     type Error = Error;
 
@@ -77,7 +120,8 @@ impl TryFrom<deflated::Batch> for Batch {
         let partition_leader_epoch = value.partition_leader_epoch;
         let magic = value.magic;
         let crc = value.crc;
-        let attributes = value.attributes;
+        let attributes =
+            BatchAttribute::try_from(value.attributes).inspect(|attribute| debug!(?attribute))?;
         let last_offset_delta = value.last_offset_delta;
         let base_timestamp = value.base_timestamp;
         let max_timestamp = value.max_timestamp;
@@ -93,7 +137,7 @@ impl TryFrom<deflated::Batch> for Batch {
             partition_leader_epoch,
             magic,
             crc,
-            attributes,
+            attributes: attributes.compression(Compression::None).into(),
             last_offset_delta,
             base_timestamp,
             max_timestamp,
@@ -178,6 +222,16 @@ impl Batch {
             })
     }
 
+    /// Compact this batch, retaining only the most recent record per key.
+    ///
+    /// `head` contains the keys of records in newer batches: a record whose
+    /// key is in `head` is dropped, as is a record whose key reappears later
+    /// in this batch. Records without a key are always retained. The batch
+    /// structure (base offset, offset deltas, timestamps) is preserved, so
+    /// compaction leaves gaps in the offsets, as in Apache Kafka.
+    ///
+    /// The returned [`Compaction`] holds the compacted batch and the number
+    /// of records that were removed.
     pub fn compact(mut self, head: &BTreeSet<Bytes>) -> Result<Compaction> {
         let mut last_delta_offset_for_key = BTreeMap::new();
         let mut records = 0;
@@ -205,8 +259,9 @@ impl Batch {
                 last_delta_offset_for_key.into_values().collect();
             debug!(?delta_offsets_to_retain);
 
-            self.records
-                .retain(|record| delta_offsets_to_retain.contains(&record.offset_delta));
+            self.records.retain(|record| {
+                record.key().is_none() || delta_offsets_to_retain.contains(&record.offset_delta)
+            });
 
             self.into_builder()
                 .build()
@@ -372,17 +427,20 @@ impl Builder {
     }
 
     fn crc(&self) -> Result<u32> {
-        let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
-        let mut serializer = Encoder::new(&mut digest);
+        let mut encoder = RecordBatchEncoder::new(BytesMut::with_capacity(self.size_in_bytes()?));
+        self.attributes.serialize(&mut encoder)?;
+        self.last_offset_delta.serialize(&mut encoder)?;
+        self.base_timestamp.serialize(&mut encoder)?;
+        self.max_timestamp.serialize(&mut encoder)?;
+        self.producer_id.serialize(&mut encoder)?;
+        self.producer_epoch.serialize(&mut encoder)?;
+        self.base_sequence.serialize(&mut encoder)?;
+        self.records.serialize(&mut encoder)?;
 
-        self.attributes.serialize(&mut serializer)?;
-        self.last_offset_delta.serialize(&mut serializer)?;
-        self.base_timestamp.serialize(&mut serializer)?;
-        self.max_timestamp.serialize(&mut serializer)?;
-        self.producer_id.serialize(&mut serializer)?;
-        self.producer_epoch.serialize(&mut serializer)?;
-        self.base_sequence.serialize(&mut serializer)?;
-        self.records.serialize(&mut serializer)?;
+        let encoded = Bytes::from(encoder);
+
+        let mut digest = crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc32Iscsi);
+        digest.update(&encoded[..]);
 
         Ok(digest.finalize() as u32)
     }
@@ -425,11 +483,56 @@ impl Builder {
 
 #[cfg(test)]
 mod tests {
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::EnvFilter;
+
     use super::*;
-    use crate::{Result, de::BatchDecoder};
+    use crate::{MaximumAllocationSize, Result, de::BatchDecoder};
+
+    fn init_tracing() -> Result<DefaultGuard> {
+        use std::{fs::File, sync::Arc, thread};
+
+        Ok(tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_level(true)
+                .with_line_number(true)
+                .with_thread_names(false)
+                .with_env_filter(EnvFilter::from_default_env().add_directive(
+                    format!("{}=debug", env!("CARGO_PKG_NAME").replace("-", "_")).parse()?,
+                ))
+                .with_writer(
+                    thread::current()
+                        .name()
+                        .ok_or(Error::Message(String::from("unnamed thread")))
+                        .and_then(|name| {
+                            File::create(format!("../logs/{}/{name}.log", env!("CARGO_PKG_NAME"),))
+                                .map_err(Into::into)
+                        })
+                        .map(Arc::new)?,
+                )
+                .finish(),
+        ))
+    }
+
+    #[test]
+    fn record_maximum_allocation() -> Result<()> {
+        let record = Record::builder()
+            .value(Some(Bytes::from_static(&[100, 101, 102])))
+            .build()?;
+
+        let mut encoder = RecordBatchEncoder::new(BytesMut::new());
+        record.serialize(&mut encoder)?;
+
+        let encoded = BytesMut::from(encoder);
+        assert_eq!(record.maximum_allocation_size()?, encoded.len());
+
+        Ok(())
+    }
 
     #[test]
     fn batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let decoded = Batch::builder()
             .base_offset(0)
             .partition_leader_epoch(-1)
@@ -441,7 +544,7 @@ mod tests {
             .producer_id(1)
             .producer_epoch(0)
             .base_sequence(1)
-            .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
+            .record(Record::builder().value(Some(Bytes::from_static(&[100, 101, 102]))))
             .build()?;
 
         assert_eq!(decoded.batch_length, 59);
@@ -452,6 +555,8 @@ mod tests {
 
     #[test]
     fn batch_decode() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let encoded = vec![
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
@@ -482,11 +587,13 @@ mod tests {
 
     #[test]
     fn batch_encode() -> Result<()> {
-        let encoded = vec![
+        let _guard = init_tracing()?;
+
+        let encoded = Bytes::from_static(&[
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 59, 255, 255, 255, 255, 2, 67, 41, 231, 61, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 1, 141, 116, 152, 137, 53, 0, 0, 0, 0,
             0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 18, 0, 0, 0, 1, 6, 100, 101, 102, 0,
-        ];
+        ]);
 
         let decoded = Batch::builder()
             .base_offset(0)
@@ -502,7 +609,7 @@ mod tests {
             .record(Record::builder().value(Some(Bytes::from(vec![100, 101, 102]))))
             .build()?;
 
-        let decoder = BatchDecoder::new(Bytes::copy_from_slice(&encoded[..]));
+        let decoder = BatchDecoder::new(encoded);
         let actual = Batch::deserialize(decoder)?;
 
         assert_eq!(decoded, actual);
@@ -512,6 +619,8 @@ mod tests {
 
     #[test]
     fn build_batch_records() -> Result<()> {
+        let _guard = init_tracing()?;
+
         let keys: Vec<_> = (0..=6).map(|i| format!("k{i}")).map(Bytes::from).collect();
         let values: Vec<_> = (0..=11).map(|i| format!("v{i}")).map(Bytes::from).collect();
 
@@ -541,6 +650,136 @@ mod tests {
 
         let batch = builder.build()?;
         assert_eq!(indexes.len(), batch.records.len());
+
+        Ok(())
+    }
+
+    fn keyed(offset_delta: i32, key: &'static [u8], value: &'static [u8]) -> super::super::Builder {
+        Record::builder()
+            .offset_delta(offset_delta)
+            .key(Some(Bytes::from_static(key)))
+            .value(Some(Bytes::from_static(value)))
+    }
+
+    #[test]
+    fn compact_noop_without_duplicates() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .record(keyed(0, b"k1", b"v1"))
+            .record(keyed(1, b"k2", b"v2"))
+            .last_offset_delta(1)
+            .build()?;
+
+        let compaction = batch.clone().compact(&BTreeSet::new())?;
+
+        assert_eq!(0, compaction.records);
+        assert_eq!(batch, compaction.batch);
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_within_batch_keeps_last_occurrence_per_key() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .base_offset(5)
+            .record(keyed(0, b"k1", b"v1"))
+            .record(keyed(1, b"k2", b"v2"))
+            .record(keyed(2, b"k1", b"v3"))
+            .last_offset_delta(2)
+            .build()?;
+
+        let compaction = batch.compact(&BTreeSet::new())?;
+
+        assert_eq!(1, compaction.records);
+
+        let records = &compaction.batch.records;
+        assert_eq!(2, records.len());
+        assert_eq!(1, records[0].offset_delta);
+        assert_eq!(Some(Bytes::from_static(b"k2")), records[0].key);
+        assert_eq!(2, records[1].offset_delta);
+        assert_eq!(Some(Bytes::from_static(b"v3")), records[1].value);
+
+        // batch structure is preserved so offsets keep their gaps
+        assert_eq!(5, compaction.batch.base_offset);
+        assert_eq!(2, compaction.batch.last_offset_delta);
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_drops_keys_in_head() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .record(keyed(0, b"k1", b"v1"))
+            .record(keyed(1, b"k2", b"v2"))
+            .last_offset_delta(1)
+            .build()?;
+
+        let head = BTreeSet::from([Bytes::from_static(b"k1"), Bytes::from_static(b"k2")]);
+        let compaction = batch.compact(&head)?;
+
+        assert_eq!(2, compaction.records);
+        assert!(compaction.batch.records.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_retains_keyless_records() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .offset_delta(0)
+                    .value(Some(Bytes::from_static(b"v0"))),
+            )
+            .record(keyed(1, b"k1", b"v1"))
+            .record(keyed(2, b"k1", b"v2"))
+            .last_offset_delta(2)
+            .build()?;
+
+        let compaction = batch.compact(&BTreeSet::new())?;
+
+        assert_eq!(1, compaction.records);
+
+        let records = &compaction.batch.records;
+        assert_eq!(2, records.len());
+        assert_eq!(0, records[0].offset_delta);
+        assert_eq!(None, records[0].key);
+        assert_eq!(2, records[1].offset_delta);
+        assert_eq!(Some(Bytes::from_static(b"k1")), records[1].key);
+
+        Ok(())
+    }
+
+    #[test]
+    fn compact_retains_keyless_when_all_keyed_records_drop() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let batch = Batch::builder()
+            .record(
+                Record::builder()
+                    .offset_delta(0)
+                    .value(Some(Bytes::from_static(b"v0"))),
+            )
+            .record(keyed(1, b"k1", b"v1"))
+            .last_offset_delta(1)
+            .build()?;
+
+        let head = BTreeSet::from([Bytes::from_static(b"k1")]);
+        let compaction = batch.compact(&head)?;
+
+        assert_eq!(1, compaction.records);
+
+        let records = &compaction.batch.records;
+        assert_eq!(1, records.len());
+        assert_eq!(0, records[0].offset_delta);
+        assert_eq!(None, records[0].key);
 
         Ok(())
     }

@@ -11,9 +11,11 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 backoff.workspace = true
 bytes.workspace = true
 deadpool.workspace = true
+humantime.workspace = true
 opentelemetry-semantic-conventions.workspace = true
 opentelemetry.workspace = true
 rama.workspace = true

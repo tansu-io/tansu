@@ -303,7 +303,7 @@ impl Proxy {
             TcpListenerLayer::new(token),
             TcpContextLayer::default(),
             TcpBytesLayer::<()>::default(),
-            BytesFrameLayer,
+            BytesFrameLayer::default(),
             meta,
             produce,
             find_coordinator,

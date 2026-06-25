@@ -34,7 +34,7 @@ async fn server(cancellation: CancellationToken, listener: TcpListener) -> Resul
         TcpListenerLayer::new(cancellation),
         TcpContextLayer::default(),
         TcpBytesLayer::<()>::default(),
-        BytesFrameLayer,
+        BytesFrameLayer::default(),
     )
         .into_layer(FrameService::new(|_, req: Frame| {
             debug!(?req);

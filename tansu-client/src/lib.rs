@@ -84,7 +84,7 @@
 //!     TcpListenerLayer::new(token),
 //!     TcpContextLayer::default(),
 //!     TcpBytesLayer::<()>::default(),
-//!     BytesFrameLayer,
+//!     BytesFrameLayer::default(),
 //!
 //!     // client layers: writing frames -> connection pool -> bytes -> origin:
 //!     FramePoolLayer::new(origin),
@@ -102,7 +102,7 @@
 use std::{
     collections::BTreeMap,
     error, fmt, io,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, PoisonError},
     time::SystemTime,
 };
 
@@ -127,6 +127,10 @@ use tracing::{Instrument, Level, debug, span};
 use tracing_subscriber::filter::ParseError;
 use url::Url;
 
+mod consumer;
+
+pub use consumer::{ConsumerGroupLayer, ConsumerGroupService};
+
 /// Client Errors
 #[derive(thiserror::Error, Clone, Debug)]
 pub enum Error {
@@ -136,11 +140,18 @@ pub enum Error {
     Message(String),
     ParseFilter(Arc<ParseError>),
     ParseUrl(#[from] url::ParseError),
+    Poison,
     Pool(Arc<Box<dyn error::Error + Send + Sync>>),
     Protocol(#[from] tansu_sans_io::Error),
     Service(#[from] tansu_service::Error),
     UnknownApiKey(i16),
     UnknownHost(Url),
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(_value: PoisonError<T>) -> Self {
+        Self::Poison
+    }
 }
 
 impl fmt::Display for Error {
@@ -268,8 +279,7 @@ impl managed::Manager for ConnectionManager {
         obj: &mut Self::Type,
         metrics: &managed::Metrics,
     ) -> managed::RecycleResult<Self::Error> {
-        debug!(?obj, ?metrics);
-
+        debug!(obj.correlation_id, metrics.recycle_count);
         Ok(())
     }
 }
@@ -519,7 +529,18 @@ where
         let pool = ctx.state();
         status_update(pool);
 
-        let connection = pool.get().await?;
+        let connection = {
+            let start = SystemTime::now();
+            pool.get().await.inspect(|_| {
+                POOL_GET_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[],
+                );
+            })?
+        };
+
         let correlation_id = connection.correlation_id;
 
         let frame = Frame {
@@ -574,10 +595,23 @@ where
     async fn serve(&self, ctx: Context<Pool>, req: Q) -> Result<Self::Response, Self::Error> {
         debug!(?req);
         let pool = ctx.state();
+        status_update(pool);
+
         let api_key = Q::KEY;
         let api_version = pool.manager().api_version(api_key)?;
         let client_id = pool.manager().client_id();
-        let connection = pool.get().await?;
+        let connection = {
+            let start = SystemTime::now();
+            pool.get().await.inspect(|_| {
+                POOL_GET_DURATION.record(
+                    start
+                        .elapsed()
+                        .map_or(0, |duration| duration.as_millis() as u64),
+                    &[],
+                );
+            })?
+        };
+
         let correlation_id = connection.correlation_id;
 
         let frame = Frame {
@@ -757,6 +791,14 @@ static TCP_BYTES_RECEIVED: LazyLock<Counter<u64>> = LazyLock::new(|| {
         .build()
 });
 
+static POOL_GET_DURATION: LazyLock<Histogram<u64>> = LazyLock::new(|| {
+    METER
+        .u64_histogram("pool_get_duration")
+        .with_unit("ms")
+        .with_description("The Pool Get latencies in milliseconds")
+        .build()
+});
+
 static POOL_MAX_SIZE: LazyLock<Gauge<u64>> = LazyLock::new(|| {
     METER
         .u64_gauge("pool_max_size")
@@ -830,7 +872,7 @@ mod tests {
             TcpListenerLayer::new(cancellation),
             TcpContextLayer::default(),
             TcpBytesLayer::default(),
-            BytesFrameLayer,
+            BytesFrameLayer::default(),
         )
             .into_layer(
                 FrameRouteService::builder()

@@ -19,7 +19,7 @@ use std::{
     fmt::{Debug, Display},
     str::FromStr,
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 use async_trait::async_trait;
@@ -43,7 +43,7 @@ use rand::{prelude::*, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tansu_sans_io::{
     BatchAttribute, ConfigResource, ConfigSource, ConfigType, ControlBatch, EndTransactionMarker,
-    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType,
+    ErrorCode, IsolationLevel, ListOffset, NULL_TOPIC_ID, OpType, ScramMechanism,
     add_partitions_to_txn_response::{
         AddPartitionsToTxnPartitionResult, AddPartitionsToTxnTopicResult,
     },
@@ -67,6 +67,7 @@ use tansu_schema::{
     Registry,
     lake::{House, LakeHouse as _},
 };
+use tokio::time::Duration;
 use tracing::{debug, error, instrument, warn};
 use url::Url;
 use uuid::Uuid;
@@ -74,11 +75,14 @@ use uuid::Uuid;
 mod metadata;
 mod opticon;
 
+#[cfg(test)]
+mod tests;
+
 use crate::{
     BrokerRegistrationRequest, Error, GroupDetail, ListOffsetResponse, METER, MetadataResponse,
-    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result, Storage,
-    TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse, TxnOffsetCommitRequest,
-    TxnState, UpdateError, Version,
+    NamedGroupDetail, OffsetCommitRequest, OffsetStage, ProducerIdResponse, Result,
+    ScramCredential, Storage, TopicId, Topition, TxnAddPartitionsRequest, TxnAddPartitionsResponse,
+    TxnOffsetCommitRequest, TxnState, UpdateError, Version,
 };
 
 const APPLICATION_JSON: &str = "application/json";
@@ -212,20 +216,45 @@ impl Meta {
                 .unwrap_or_default()
                 .iter()
                 .fold(BTreeMap::new(), |mut acc, item| {
-                    _ = acc.insert(item.name.as_str(), item.value.as_deref());
+                    _ = acc.insert(item.name.clone(), item.value.clone());
                     acc
                 });
 
             for change in changes {
                 match OpType::try_from(change.config_operation)? {
                     OpType::Set => {
-                        _ = configuration.insert(change.name.as_str(), change.value.as_deref());
+                        _ = configuration.insert(change.name.clone(), change.value.clone());
                     }
                     OpType::Delete => {
                         _ = configuration.remove(change.name.as_str());
                     }
-                    OpType::Append => todo!(),
-                    OpType::Subtract => todo!(),
+                    // append to, or subtract from, a comma separated list
+                    OpType::Append => {
+                        let appended = change.value.as_deref().unwrap_or_default();
+
+                        _ = configuration
+                            .entry(change.name.clone())
+                            .and_modify(|value| match value {
+                                Some(current) if !current.is_empty() => {
+                                    if !current.split(',').any(|item| item == appended) {
+                                        *current = format!("{current},{appended}");
+                                    }
+                                }
+                                _ => *value = Some(appended.to_owned()),
+                            })
+                            .or_insert_with(|| Some(appended.to_owned()));
+                    }
+                    OpType::Subtract => {
+                        let subtracted = change.value.as_deref().unwrap_or_default();
+
+                        if let Some(Some(current)) = configuration.get_mut(change.name.as_str()) {
+                            *current = current
+                                .split(',')
+                                .filter(|item| *item != subtracted)
+                                .collect::<Vec<_>>()
+                                .join(",");
+                        }
+                    }
                 }
             }
 
@@ -236,11 +265,7 @@ impl Meta {
                     configuration
                         .into_iter()
                         .fold(Vec::new(), |mut acc, (key, value)| {
-                            acc.push(
-                                CreatableTopicConfig::default()
-                                    .name(key.to_owned())
-                                    .value(value.map(|value| value.to_owned())),
-                            );
+                            acc.push(CreatableTopicConfig::default().name(key).value(value));
                             acc
                         }),
                 );
@@ -462,7 +487,10 @@ impl DynoStore {
 
                 debug!(%location, ?value, ?current);
 
-                Err(UpdateError::Outdated { current, version })
+                Err(UpdateError::Outdated {
+                    current: Box::new(current),
+                    version,
+                })
             }
 
             Err(otherwise) => Err(otherwise.into()),
@@ -844,7 +872,13 @@ impl Storage for DynoStore {
                 })
                 .await
                 .inspect(|outcome| debug!(transaction_id, ?topition, ?outcome))
-                .inspect_err(|err| error!(?err, transaction_id, ?topition))?;
+                .inspect_err(|err| {
+                    if matches!(err, Error::Api(ErrorCode::OutOfOrderSequenceNumber) | Error::Api(ErrorCode::DuplicateSequenceNumber)) {
+                        return
+                    }
+
+                    error!(?err, transaction_id, ?topition);
+                })?;
             }
 
             if let Some(ref registry) = self.schemas {
@@ -987,7 +1021,18 @@ impl Storage for DynoStore {
         min_bytes: u32,
         max_bytes: u32,
         isolation_level: IsolationLevel,
+        max_wait: Duration,
     ) -> Result<Vec<deflated::Batch>> {
+        let started_at = SystemTime::now();
+
+        let has_deadline_expired = || {
+            started_at
+                .elapsed()
+                .inspect(|elapsed| debug!(?elapsed, ?max_wait))
+                .map(|elapsed| max_wait.saturating_sub(elapsed).is_zero())
+                .unwrap_or_default()
+        };
+
         let high_watermark = self.offset_stage(topition).await.map(|offset_stage| {
             if isolation_level == IsolationLevel::ReadCommitted {
                 offset_stage.last_stable
@@ -1015,6 +1060,7 @@ impl Storage for DynoStore {
                 .transpose()
                 .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?
+                && !has_deadline_expired()
             {
                 let Some(offset) = meta.location.parts().next_back() else {
                     continue;
@@ -1029,23 +1075,37 @@ impl Storage for DynoStore {
             }
         }
 
+        let mut wanted = offsets.split_off(&offset);
+
+        // The fetch offset can fall inside a batch that starts before it;
+        // Kafka returns that batch whole, leaving the client to skip the
+        // records below the fetch offset. The preceding batch is dropped
+        // after decoding if it ends before the fetch offset.
+        if wanted.first().copied() != Some(offset)
+            && let Some(preceding) = offsets.pop_last()
+        {
+            _ = wanted.insert(preceding);
+        }
+
         let mut batches = vec![];
 
         let mut bytes = max_bytes as u64;
 
-        for offset in offsets.split_off(&offset) {
-            debug!(?offset);
+        for base_offset in wanted {
+            debug!(?base_offset);
 
             let location = Path::from(format!(
                 "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
-                self.cluster, topition.topic, topition.partition, offset,
+                self.cluster, topition.topic, topition.partition, base_offset,
             ));
 
             let get_result = self
                 .object_store
                 .get(&location)
                 .await
-                .inspect_err(|error| error!(?error, ?topition, ?offset, ?min_bytes, ?max_bytes))
+                .inspect_err(|error| {
+                    error!(?error, ?topition, ?base_offset, ?min_bytes, ?max_bytes)
+                })
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))?;
 
             let size = get_result.meta.size;
@@ -1056,13 +1116,20 @@ impl Storage for DynoStore {
                 .inspect_err(|error| error!(?error, %location))
                 .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
                 .and_then(|encoded| self.decode(encoded))?;
-            batch.base_offset = offset;
-            batches.push(batch);
+            batch.base_offset = base_offset;
 
-            if size > bytes {
-                break;
-            } else {
+            if base_offset + i64::from(batch.last_offset_delta) >= offset {
+                batches.push(batch);
+
+                if size > bytes {
+                    break;
+                }
+
                 bytes = bytes.saturating_sub(size);
+            }
+
+            if has_deadline_expired() {
+                break;
             }
         }
 
@@ -2621,6 +2688,32 @@ impl Storage for DynoStore {
     }
 
     #[instrument(skip_all)]
+    async fn delete_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn upsert_user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+        _credential: ScramCredential,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn user_scram_credential(
+        &self,
+        _user: &str,
+        _mechanism: ScramMechanism,
+    ) -> Result<Option<ScramCredential>> {
+        Ok(None)
+    }
+
+    #[instrument(skip_all)]
     async fn ping(&self) -> Result<()> {
         // Verify connectivity by listing objects at the root
         let _ = self.object_store.list(Some(&Path::from("/"))).next().await;
@@ -2899,55 +2992,5 @@ where
                 additional.append(&mut attributes);
                 self.request_error.add(1, &additional[..]);
             })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn range_check() {
-        let map = BTreeMap::from([(3, "a"), (5, "b"), (8, "c")]);
-
-        assert_eq!(Some((&3, &"a")), map.range(2..).next());
-        assert_eq!(Some((&5, &"b")), map.range(4..).next());
-        assert_eq!(None, map.range(9..).next());
-    }
-
-    #[test]
-    fn schema_change() -> Result<()> {
-        #[derive(
-            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
-        )]
-        struct X0 {
-            low: Option<i64>,
-            high: Option<i64>,
-        }
-
-        let low = Some(6);
-        let high = Some(66);
-
-        let x0 = X0 { low, high };
-
-        let encoded = serde_json::to_string(&x0)?;
-
-        #[derive(
-            Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize,
-        )]
-        struct X1 {
-            low: Option<i64>,
-            high: Option<i64>,
-            timestamps: Option<BTreeMap<i64, i64>>,
-        }
-
-        let x1: X1 = serde_json::from_str(&encoded[..])?;
-
-        assert_eq!(low, x1.low);
-        assert_eq!(high, x1.high);
-        assert!(x1.timestamps.is_none());
-
-        Ok(())
     }
 }

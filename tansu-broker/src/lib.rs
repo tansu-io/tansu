@@ -22,7 +22,7 @@ use std::{
     str::{FromStr, Utf8Error},
     string::FromUtf8Error,
     sync::{Arc, LazyLock, PoisonError},
-    time::Duration,
+    time::{Duration, SystemTimeError},
 };
 
 use glob::PatternError;
@@ -72,6 +72,7 @@ pub(crate) static METER: LazyLock<Meter> = LazyLock::new(|| {
 pub enum Error {
     AddrParse(#[from] AddrParseError),
     Api(ErrorCode),
+    Auth(#[from] tansu_auth::Error),
     Custom(String),
     DuplicateApiService(i16),
     EmptyCoordinatorWrapper,
@@ -102,11 +103,13 @@ pub enum Error {
     #[cfg(feature = "postgres")]
     Pool(Arc<deadpool_postgres::PoolError>),
 
+    Regex(#[from] regex::Error),
+
     SchemaRegistry(Arc<tansu_schema::Error>),
     Service(#[from] tansu_service::Error),
     Storage(#[from] tansu_storage::Error),
     StringUtf8(#[from] FromUtf8Error),
-    Regex(#[from] regex::Error),
+    SystemTime(#[from] SystemTimeError),
 
     #[cfg(feature = "postgres")]
     TokioPostgres(Arc<tokio_postgres::error::Error>),
