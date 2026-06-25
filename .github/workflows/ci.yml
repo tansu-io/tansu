@@ -238,19 +238,22 @@ jobs:
                 "${f}"
           done | sort >> "${GITHUB_STEP_SUMMARY}"
   compat-franz-go:
-    if: false
     runs-on: ${{matrix.os}}
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         os:
           - ubuntu-latest
         storage:
-          - engine: memory://
+          - name: memory
+            engine: memory://
             features: dynostore
-          - engine: sqlite://tansu.db
+          - name: sqlite
+            engine: sqlite://tansu.db
             features: libsql
     env:
+      RESULTS_FILE: results-${{matrix.storage.name}}.csv
       RUST_BACKTRACE: 1
       RUST_LOG: warn
     steps:
@@ -263,6 +266,37 @@ jobs:
         with:
           go-version: stable
       - run: just compat-franz-go '${{matrix.storage.engine}}' '${{matrix.storage.features}}'
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compat-franz-go-results-${{matrix.storage.name}}
+          path: ${{env.RESULTS_FILE}}
+          if-no-files-found: warn
+  compat-franz-go-report:
+    if: always()
+    needs: [compat-franz-go]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: compat-franz-go-results-*
+          path: results
+          merge-multiple: true
+      - run: |
+          {
+            echo "## franz-go compatibility report card"
+            echo
+            echo "| storage engine | test | result |"
+            echo "|---|---|---|"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          for f in results/results-*.csv; do
+            [[ -e "${f}" ]] || continue
+            storage="$(basename "${f}" .csv)"
+            storage="${storage#results-}"
+            awk -F, -v s="${storage}" \
+                '{printf "| %s | %s | %s |\n", s, $1, ($2 == "PASS" ? "✅ PASS" : "❌ FAIL")}' \
+                "${f}"
+          done | sort >> "${GITHUB_STEP_SUMMARY}"
   cargo-publish-dry-run:
     runs-on: ${{matrix.os}}
     strategy:

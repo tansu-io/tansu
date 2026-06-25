@@ -24,6 +24,17 @@ COMPAT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${WORK_DIR:-${COMPAT_DIR}/../../target/compat}"
 SRC_DIR="${WORK_DIR}/franz-go"
 
+# when set, a "test,PASS|FAIL" line is appended for every top-level test,
+# so CI can build a report card across storage engines
+RESULTS_FILE="${RESULTS_FILE:-}"
+if [[ -n "${RESULTS_FILE}" ]]; then
+    mkdir -p "$(dirname "${RESULTS_FILE}")"
+    : > "${RESULTS_FILE}"
+    # resolve to an absolute path: the test suite runs from a different
+    # working directory than this script started in
+    RESULTS_FILE="$(cd "$(dirname "${RESULTS_FILE}")" && pwd)/$(basename "${RESULTS_FILE}")"
+fi
+
 mkdir -p "${WORK_DIR}"
 
 if [[ ! -d "${SRC_DIR}" ]]; then
@@ -46,8 +57,21 @@ count=$(grep -cEv '^[[:space:]]*(#|$)' "${COMPAT_DIR}/tests.allow")
 echo "running ${count// /} franz-go test(s) against ${BOOTSTRAP_SERVERS}"
 
 cd "${SRC_DIR}/pkg/kgo"
+
+output="${WORK_DIR}/franz-go.log"
+
+set +e
 KGO_SEEDS="${BOOTSTRAP_SERVERS}" \
 KGO_TEST_RF=1 \
 KGO_TEST_RECORDS="${KGO_TEST_RECORDS:-10000}" \
 KGO_LOG_LEVEL="${KGO_LOG_LEVEL:-none}" \
-    go test -count=1 -timeout 600s -run "^(${tests})\$" .
+    go test -count=1 -timeout 600s -v -run "^(${tests})\$" . | tee "${output}"
+status="${PIPESTATUS[0]}"
+set -e
+
+if [[ -n "${RESULTS_FILE}" ]]; then
+    grep -E '^--- (PASS|FAIL): ' "${output}" |
+        sed -E 's/^--- (PASS|FAIL): ([^ ]+).*/\2,\1/' >> "${RESULTS_FILE}"
+fi
+
+exit "${status}"
