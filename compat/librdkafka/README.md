@@ -1,7 +1,7 @@
 # librdkafka compatibility suite
 
 Runs the [librdkafka](https://github.com/confluentinc/librdkafka)
-integration test suite against tansu, as a client-compatibility check.
+integration test suite against nisshi, as a client-compatibility check.
 librdkafka underpins kcat, confluent-kafka-python, confluent-kafka-go and
 confluent-kafka-dotnet, so passing its suite covers a large share of the
 non-Java Kafka client ecosystem.
@@ -12,7 +12,7 @@ non-Java Kafka client ecosystem.
 just compat-librdkafka
 ```
 
-This builds tansu (`dynostore` feature), starts a `memory://` broker
+This builds nisshi (`dynostore` feature), starts a `memory://` broker
 advertising `tcp://127.0.0.1:9092`, then runs `run.sh`, which:
 
 1. clones librdkafka at the tag pinned in `run.sh` (`LIBRDKAFKA_VERSION`)
@@ -27,14 +27,14 @@ To run against a different storage engine, pass it along with the
 matching feature, e.g.:
 
 ```shell
-just compat-librdkafka 'sqlite://tansu.db' libsql
+just compat-librdkafka 'sqlite://nisshi.db' libsql
 just compat-librdkafka 'postgres://postgres:postgres@localhost' postgres
-just compat-librdkafka 's3://tansu/' dynostore
+just compat-librdkafka 's3://nisshi/' dynostore
 ```
 
 To run against an already-running broker, call `./run.sh` directly. The
 broker must advertise an IPv4 address (librdkafka may resolve `localhost`
-to `::1`, and tansu listens on IPv4 only). Set `RESULTS_FILE` to also
+to `::1`, and nisshi listens on IPv4 only). Set `RESULTS_FILE` to also
 record a `test,PASS|FAIL` line per test, e.g. for building a report card
 across storage engines (see the `compat-librdkafka` job in
 `.github/workflows/ci.yml`).

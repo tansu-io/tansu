@@ -97,7 +97,7 @@ Algorithm:
 The `Topition` struct and `BTreeSet<Topition>` builder are private to `assignor.rs`. Move
 them (or re-export) so all assignors can use them.
 
-**File**: `tansu-sans-io/src/consumer/assignor.rs`
+**File**: `nisshi-sans-io/src/consumer/assignor.rs`
 
 Add a public(crate) helper:
 
@@ -123,7 +123,7 @@ pub(super) fn build_assignments(
 
 ### Step 2 — Implement `RoundRobinAssignor`
 
-**File**: `tansu-sans-io/src/consumer/assignor/round_robin.rs`
+**File**: `nisshi-sans-io/src/consumer/assignor/round_robin.rs`
 
 ```rust
 pub struct RoundRobinAssignor;
@@ -148,7 +148,7 @@ Export from `assignor.rs` as `pub use round_robin::RoundRobinAssignor`.
 
 ### Step 3 — Implement `UniformAssignor`
 
-**File**: `tansu-sans-io/src/consumer/assignor/uniform.rs`
+**File**: `nisshi-sans-io/src/consumer/assignor/uniform.rs`
 
 For v1 this is a thin wrapper around `RoundRobinAssignor::assign`.
 
@@ -164,7 +164,7 @@ impl ConsumerAssignor for UniformAssignor {
 
 ### Step 4 — Implement `CooperativeStickyAssignor`
 
-**File**: `tansu-sans-io/src/consumer/assignor/cooperative_sticky.rs`
+**File**: `nisshi-sans-io/src/consumer/assignor/cooperative_sticky.rs`
 
 For v1, same delegate-to-round-robin approach. Add a `TODO` comment for the incremental
 rebalance logic that reads `owned_partitions`.
@@ -224,7 +224,7 @@ if v1 doesn't honour it yet, it validates the data round-trip.
 ## File Layout After Changes
 
 ```
-tansu-sans-io/src/consumer/
+nisshi-sans-io/src/consumer/
 ├── assignor.rs              # Topition, sorted_members helper, module declarations
 ├── assignor/
 │   ├── range.rs             # existing RangeAssignor (unchanged)

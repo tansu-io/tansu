@@ -2,30 +2,30 @@
 resolver = "3"
 members = [
     "fuzz",
-    "tansu",
-    "tansu",
-    "tansu-auth",
-    "tansu-broker",
-    "tansu-cat",
-    "tansu-cli",
-    "tansu-client",
-    "tansu-generator",
-    "tansu-model",
-    "tansu-otel", "tansu-perf",
-    "tansu-proxy",
-    "tansu-sans-io",
-    "tansu-schema",
-    "tansu-service",
-    "tansu-storage",
-    "tansu-topic",
+    "nisshi",
+    "nisshi-auth",
+    "nisshi-broker",
+    "nisshi-cat",
+    "nisshi-cli",
+    "nisshi-client",
+    "nisshi-generator",
+    "nisshi-model",
+    "nisshi-otel",
+    "nisshi-perf",
+    "nisshi-proxy",
+    "nisshi-sans-io",
+    "nisshi-schema",
+    "nisshi-service",
+    "nisshi-storage",
+    "nisshi-topic",
 ]
 
 [workspace.package]
 edition = "2024"
 version = "0.6.0"
 license = "Apache-2.0"
-homepage = "https://tansu.io"
-repository = "https://github.com/tansu-io/tansu"
+homepage = "https://nisshi.io"
+repository = "https://github.com/nisshi-io/nisshi"
 keywords = ["deltalake", "iceberg", "kafka", "postgres", "s3"]
 authors = ["Peter Morgan <peter.morgan@tansu.io>"]
 include = [
@@ -147,22 +147,22 @@ sha2 = "0.10.9"
 slatedb = "0.10.1"
 snap = "1.1.1"
 syn = { version = "2.0", features = ["full"] }
-tansu = { version = "0.6.0", path = "tansu", default-features = false }
-tansu-auth = { version = "0.6.0", path = "tansu-auth", default-features = false }
-tansu-broker = { version = "0.6.0", path = "tansu-broker", default-features = false }
-tansu-cat = { version = "0.6.0", path = "tansu-cat", default-features = false }
-tansu-cli = { version = "0.6.0", path = "tansu-cli", default-features = false }
-tansu-client = { version = "0.6.0", path = "tansu-client", default-features = false }
-tansu-generator = { version = "0.6.0", path = "tansu-generator", default-features = false }
-tansu-model = { version = "0.6.0", path = "tansu-model", default-features = false }
-tansu-otel = { version = "0.6.0", path = "tansu-otel", default-features = false }
-tansu-perf = { version = "0.6.0", path = "tansu-perf", default-features = false }
-tansu-proxy = { version = "0.6.0", path = "tansu-proxy", default-features = false }
-tansu-sans-io = { version = "0.6.0", path = "tansu-sans-io", default-features = false }
-tansu-schema = { version = "0.6.0", path = "tansu-schema", default-features = false }
-tansu-service = { version = "0.6.0", path = "tansu-service", default-features = false }
-tansu-storage = { version = "0.6.0", path = "tansu-storage", default-features = false }
-tansu-topic = { version = "0.6.0", path = "tansu-topic", default-features = false }
+nisshi = { version = "0.6.0", path = "nisshi", default-features = false }
+nisshi-auth = { version = "0.6.0", path = "nisshi-auth", default-features = false }
+nisshi-broker = { version = "0.6.0", path = "nisshi-broker", default-features = false }
+nisshi-cat = { version = "0.6.0", path = "nisshi-cat", default-features = false }
+nisshi-cli = { version = "0.6.0", path = "nisshi-cli", default-features = false }
+nisshi-client = { version = "0.6.0", path = "nisshi-client", default-features = false }
+nisshi-generator = { version = "0.6.0", path = "nisshi-generator", default-features = false }
+nisshi-model = { version = "0.6.0", path = "nisshi-model", default-features = false }
+nisshi-otel = { version = "0.6.0", path = "nisshi-otel", default-features = false }
+nisshi-perf = { version = "0.6.0", path = "nisshi-perf", default-features = false }
+nisshi-proxy = { version = "0.6.0", path = "nisshi-proxy", default-features = false }
+nisshi-sans-io = { version = "0.6.0", path = "nisshi-sans-io", default-features = false }
+nisshi-schema = { version = "0.6.0", path = "nisshi-schema", default-features = false }
+nisshi-service = { version = "0.6.0", path = "nisshi-service", default-features = false }
+nisshi-storage = { version = "0.6.0", path = "nisshi-storage", default-features = false }
+nisshi-topic = { version = "0.6.0", path = "nisshi-topic", default-features = false }
 tempfile = "3"
 thiserror = "2.0"
 time = { version = "0.3.47", features = ["formatting", "macros", "parsing"] }

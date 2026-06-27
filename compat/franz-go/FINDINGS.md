@@ -1,7 +1,7 @@
 # franz-go v1.21.3 sweep findings
 
 Sweep of the franz-go `pkg/kgo` integration test suite against
-`tansu broker --storage-engine=memory://`, 2026-06-12. Passing tests are
+`nisshi broker --storage-engine=memory://`, 2026-06-12. Passing tests are
 in `tests.allow`; 61 of 64 pass (the SCRAM, share-group and KIP-848
 tests self-skip).
 
@@ -20,7 +20,7 @@ tests self-skip).
    returned nothing; they now return `a1 b2 b3` and `b3`. The pg and
    lite engines rebuild batches from per-record rows and were not
    affected. Regression test: `mid_batch` in
-   `tansu-broker/tests/fetch.rs`, run against every engine.
+   `nisshi-broker/tests/fetch.rs`, run against every engine.
 
 ## Open gaps, most impactful first
 

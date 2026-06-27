@@ -15,7 +15,7 @@
 #![no_main]
 use bytes::Bytes;
 use libfuzzer_sys::fuzz_target;
-use tansu_sans_io::consumer::MemberMetadata;
+use nisshi_sans_io::consumer::MemberMetadata;
 
 fuzz_target!(|data: &[u8]| {
     let _ = MemberMetadata::try_from(Bytes::copy_from_slice(data));

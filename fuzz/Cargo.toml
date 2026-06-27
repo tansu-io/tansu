@@ -11,7 +11,7 @@ cargo-fuzz = true
 [dependencies]
 bytes.workspace = true
 libfuzzer-sys.workspace = true
-tansu-sans-io.workspace = true
+nisshi-sans-io.workspace = true
 
 [[bin]]
 name = "generate_seeds"

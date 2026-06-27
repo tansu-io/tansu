@@ -1,7 +1,7 @@
 # librdkafka v2.14.2 sweep findings
 
 Sweeps of the librdkafka integration test suite against
-`tansu broker --storage-engine=memory://`. Passing tests are in
+`nisshi broker --storage-engine=memory://`. Passing tests are in
 `tests.allow`.
 
 ## Fixed
@@ -24,7 +24,7 @@ Sweeps of the librdkafka integration test suite against
 ## Open gaps, most impactful first
 
 1. **Produce does not reject keyless records on compacted topics** —
-   Kafka fails them per-record with `INVALID_RECORD`; tansu accepts them
+   Kafka fails them per-record with `INVALID_RECORD`; nisshi accepts them
    (0011 `test_message_single_partition_record_fail`). Related to the
    deliberate retention of keyless records in batch compaction
    (commit 6db7a49).
@@ -45,7 +45,7 @@ Sweeps of the librdkafka integration test suite against
 
 6. **InitProducerId does not validate `transaction.timeout.ms`** — Kafka
    rejects values above `transaction.max.timeout.ms` with fatal
-   `INVALID_TRANSACTION_TIMEOUT`; tansu accepts them (0103
+   `INVALID_TRANSACTION_TIMEOUT`; nisshi accepts them (0103
    `do_test_misuse_txn`; the rest of 0103 passes).
 
 7. **EndTxn unsupported for abort from some clients** — 0129 fails with
@@ -62,7 +62,7 @@ Sweeps of the librdkafka integration test suite against
    metadata update after creating topics with mixed valid/invalid
    configs.
 
-## Not tansu issues (environmental skips/failures)
+## Not nisshi issues (environmental skips/failures)
 
 - 0052, 0077, 0109, 0115, 0119: need `KAFKA_PATH`/`ZK_ADDRESS` (drive
   Kafka's own CLI tools).

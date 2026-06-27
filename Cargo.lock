@@ -3785,7 +3785,7 @@ version = "0.6.0"
 dependencies = [
  "bytes",
  "libfuzzer-sys",
- "tansu-sans-io",
+ "nisshi-sans-io",
 ]
 
 [[package]]
@@ -5396,6 +5396,458 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77a5d83df9f36fe23f0c3648c6bbb8b0298bb5f1939c8f2704431371f4b84d43"
 dependencies = [
  "smallvec",
+]
+
+[[package]]
+name = "nisshi"
+version = "0.6.0"
+dependencies = [
+ "dotenv",
+ "nisshi-broker",
+ "nisshi-cat",
+ "nisshi-cli",
+ "nisshi-generator",
+ "nisshi-perf",
+ "nisshi-proxy",
+ "nisshi-sans-io",
+ "nisshi-schema",
+ "nisshi-storage",
+ "nisshi-topic",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nisshi-auth"
+version = "0.6.0"
+dependencies = [
+ "bytes",
+ "nisshi-sans-io",
+ "nisshi-storage",
+ "rama",
+ "rsasl",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nisshi-broker"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "clap",
+ "console",
+ "deadpool-postgres",
+ "futures",
+ "glob",
+ "http-body-util",
+ "humantime",
+ "hyper",
+ "hyper-util",
+ "indicatif",
+ "jsonschema",
+ "libsql",
+ "nisshi-auth",
+ "nisshi-model",
+ "nisshi-sans-io",
+ "nisshi-schema",
+ "nisshi-service",
+ "nisshi-storage",
+ "object_store 0.13.2",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "pretty_assertions",
+ "rama",
+ "rand 0.10.1",
+ "regex",
+ "rsasl",
+ "rustls",
+ "serde",
+ "serde_json",
+ "slatedb",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-postgres",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "turso",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "nisshi-cat"
+version = "0.6.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "futures-core",
+ "futures-util",
+ "nisshi-client",
+ "nisshi-sans-io",
+ "nisshi-schema",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "nisshi-cli"
+version = "0.6.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "console",
+ "dotenv",
+ "human-units",
+ "humantime",
+ "nisshi-broker",
+ "nisshi-cat",
+ "nisshi-client",
+ "nisshi-generator",
+ "nisshi-perf",
+ "nisshi-proxy",
+ "nisshi-sans-io",
+ "nisshi-schema",
+ "nisshi-storage",
+ "nisshi-topic",
+ "owo-colors",
+ "pbkdf2",
+ "rand 0.10.1",
+ "regex",
+ "rsasl",
+ "rustls",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "nisshi-client"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "backoff",
+ "bytes",
+ "clap",
+ "deadpool",
+ "dotenv",
+ "humantime",
+ "nisshi-sans-io",
+ "nisshi-service",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
+ "rama",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "nisshi-generator"
+version = "0.6.0"
+dependencies = [
+ "futures",
+ "futures-core",
+ "futures-util",
+ "governor",
+ "nisshi-client",
+ "nisshi-otel",
+ "nisshi-sans-io",
+ "nisshi-schema",
+ "nonzero_ext",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "rama",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "nisshi-model"
+version = "0.6.0"
+dependencies = [
+ "convert_case 0.11.0",
+ "lazy_static",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
+ "tracing",
+]
+
+[[package]]
+name = "nisshi-otel"
+version = "0.6.0"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "thiserror 2.0.18",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "nisshi-perf"
+version = "0.6.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "futures-core",
+ "futures-util",
+ "getrandom 0.4.2",
+ "governor",
+ "human-units",
+ "nisshi-client",
+ "nisshi-sans-io",
+ "nonzero_ext",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry-stdout",
+ "opentelemetry_sdk",
+ "rama",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "nisshi-proxy"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "clap",
+ "console",
+ "nisshi-client",
+ "nisshi-otel",
+ "nisshi-sans-io",
+ "nisshi-service",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-semantic-conventions",
+ "opentelemetry_sdk",
+ "rama",
+ "regex",
+ "syn 2.0.117",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "nisshi-sans-io"
+version = "0.6.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "convert_case 0.11.0",
+ "crc-fast",
+ "criterion",
+ "flate2",
+ "glob",
+ "lz4",
+ "nisshi-model",
+ "pretty_assertions",
+ "prettyplease",
+ "proc-macro2",
+ "proptest",
+ "quote",
+ "rama",
+ "serde",
+ "serde_json",
+ "snap",
+ "syn 2.0.117",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+ "zstd",
+]
+
+[[package]]
+name = "nisshi-schema"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "apache-avro",
+ "arrow",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "datafusion",
+ "delta_kernel 0.20.0",
+ "deltalake",
+ "dotenv",
+ "fake",
+ "futures",
+ "governor",
+ "iceberg",
+ "iceberg-catalog-rest",
+ "iceberg-datafusion",
+ "jsonschema",
+ "nisshi-sans-io",
+ "num-bigint",
+ "object_store 0.13.2",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
+ "ordered-float 5.3.0",
+ "parquet",
+ "pretty_assertions",
+ "protobuf",
+ "protobuf-json-mapping",
+ "protobuf-parse",
+ "rand 0.10.1",
+ "regex",
+ "rhai",
+ "rhai-rand",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "nisshi-service"
+version = "0.6.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "deadpool",
+ "indicatif",
+ "nanoid",
+ "nisshi-auth",
+ "nisshi-sans-io",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
+ "rama",
+ "rand 0.10.1",
+ "rsasl",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "nisshi-storage"
+version = "0.6.0"
+dependencies = [
+ "assert_matches",
+ "async-trait",
+ "bytes",
+ "cached",
+ "chrono",
+ "console",
+ "criterion",
+ "deadpool",
+ "deadpool-postgres",
+ "dotenv",
+ "futures",
+ "futures-core",
+ "futures-util",
+ "glob",
+ "governor",
+ "human-units",
+ "indicatif",
+ "libsql",
+ "nisshi-sans-io",
+ "nisshi-schema",
+ "object_store 0.13.2",
+ "opentelemetry",
+ "opentelemetry-semantic-conventions",
+ "postcard",
+ "pretty_assertions",
+ "protobuf",
+ "rama",
+ "rand 0.10.1",
+ "regex",
+ "rsasl",
+ "rustls",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "slatedb",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "turso",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "nisshi-topic"
+version = "0.6.0"
+dependencies = [
+ "futures",
+ "futures-core",
+ "futures-util",
+ "nisshi-client",
+ "nisshi-sans-io",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
@@ -8285,458 +8737,6 @@ name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
-
-[[package]]
-name = "tansu"
-version = "0.6.0"
-dependencies = [
- "dotenv",
- "tansu-broker",
- "tansu-cat",
- "tansu-cli",
- "tansu-generator",
- "tansu-perf",
- "tansu-proxy",
- "tansu-sans-io",
- "tansu-schema",
- "tansu-storage",
- "tansu-topic",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "tansu-auth"
-version = "0.6.0"
-dependencies = [
- "bytes",
- "rama",
- "rsasl",
- "tansu-sans-io",
- "tansu-storage",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "tansu-broker"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "clap",
- "console",
- "deadpool-postgres",
- "futures",
- "glob",
- "http-body-util",
- "humantime",
- "hyper",
- "hyper-util",
- "indicatif",
- "jsonschema",
- "libsql",
- "object_store 0.13.2",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "pretty_assertions",
- "rama",
- "rand 0.10.1",
- "regex",
- "rsasl",
- "rustls",
- "serde",
- "serde_json",
- "slatedb",
- "tansu-auth",
- "tansu-model",
- "tansu-sans-io",
- "tansu-schema",
- "tansu-service",
- "tansu-storage",
- "thiserror 2.0.18",
- "tokio",
- "tokio-postgres",
- "tokio-rustls",
- "tokio-util",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "turso",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "tansu-cat"
-version = "0.6.0"
-dependencies = [
- "bytes",
- "futures",
- "futures-core",
- "futures-util",
- "serde_json",
- "tansu-client",
- "tansu-sans-io",
- "tansu-schema",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "tansu-cli"
-version = "0.6.0"
-dependencies = [
- "bytes",
- "clap",
- "console",
- "dotenv",
- "human-units",
- "humantime",
- "owo-colors",
- "pbkdf2",
- "rand 0.10.1",
- "regex",
- "rsasl",
- "rustls",
- "sha2 0.10.9",
- "tansu-broker",
- "tansu-cat",
- "tansu-client",
- "tansu-generator",
- "tansu-perf",
- "tansu-proxy",
- "tansu-sans-io",
- "tansu-schema",
- "tansu-storage",
- "tansu-topic",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "tansu-client"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "backoff",
- "bytes",
- "clap",
- "deadpool",
- "dotenv",
- "humantime",
- "opentelemetry",
- "opentelemetry-semantic-conventions",
- "rama",
- "tansu-sans-io",
- "tansu-service",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "tansu-generator"
-version = "0.6.0"
-dependencies = [
- "futures",
- "futures-core",
- "futures-util",
- "governor",
- "nonzero_ext",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "rama",
- "serde_json",
- "tansu-client",
- "tansu-otel",
- "tansu-sans-io",
- "tansu-schema",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "tansu-model"
-version = "0.6.0"
-dependencies = [
- "convert_case 0.11.0",
- "lazy_static",
- "proc-macro2",
- "quote",
- "regex",
- "serde",
- "serde_json",
- "syn 2.0.117",
- "tracing",
-]
-
-[[package]]
-name = "tansu-otel"
-version = "0.6.0"
-dependencies = [
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "thiserror 2.0.18",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "tansu-perf"
-version = "0.6.0"
-dependencies = [
- "bytes",
- "futures",
- "futures-core",
- "futures-util",
- "getrandom 0.4.2",
- "governor",
- "human-units",
- "nonzero_ext",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry-stdout",
- "opentelemetry_sdk",
- "rama",
- "serde_json",
- "tansu-client",
- "tansu-sans-io",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "tansu-proxy"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "clap",
- "console",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry-semantic-conventions",
- "opentelemetry_sdk",
- "rama",
- "regex",
- "syn 2.0.117",
- "tansu-client",
- "tansu-otel",
- "tansu-sans-io",
- "tansu-service",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "tansu-sans-io"
-version = "0.6.0"
-dependencies = [
- "bytes",
- "clap",
- "convert_case 0.11.0",
- "crc-fast",
- "criterion",
- "flate2",
- "glob",
- "lz4",
- "pretty_assertions",
- "prettyplease",
- "proc-macro2",
- "proptest",
- "quote",
- "rama",
- "serde",
- "serde_json",
- "snap",
- "syn 2.0.117",
- "tansu-model",
- "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
- "zstd",
-]
-
-[[package]]
-name = "tansu-schema"
-version = "0.6.0"
-dependencies = [
- "anyhow",
- "apache-avro",
- "arrow",
- "async-trait",
- "bytes",
- "chrono",
- "datafusion",
- "delta_kernel 0.20.0",
- "deltalake",
- "dotenv",
- "fake",
- "futures",
- "governor",
- "iceberg",
- "iceberg-catalog-rest",
- "iceberg-datafusion",
- "jsonschema",
- "num-bigint",
- "object_store 0.13.2",
- "opentelemetry",
- "opentelemetry-semantic-conventions",
- "ordered-float 5.3.0",
- "parquet",
- "pretty_assertions",
- "protobuf",
- "protobuf-json-mapping",
- "protobuf-parse",
- "rand 0.10.1",
- "regex",
- "rhai",
- "rhai-rand",
- "serde",
- "serde_json",
- "tansu-sans-io",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "tansu-service"
-version = "0.6.0"
-dependencies = [
- "async-trait",
- "bytes",
- "deadpool",
- "indicatif",
- "nanoid",
- "opentelemetry",
- "opentelemetry-semantic-conventions",
- "rama",
- "rand 0.10.1",
- "rsasl",
- "tansu-auth",
- "tansu-sans-io",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "tansu-storage"
-version = "0.6.0"
-dependencies = [
- "assert_matches",
- "async-trait",
- "bytes",
- "cached",
- "chrono",
- "console",
- "criterion",
- "deadpool",
- "deadpool-postgres",
- "dotenv",
- "futures",
- "futures-core",
- "futures-util",
- "glob",
- "governor",
- "human-units",
- "indicatif",
- "libsql",
- "object_store 0.13.2",
- "opentelemetry",
- "opentelemetry-semantic-conventions",
- "postcard",
- "pretty_assertions",
- "protobuf",
- "rama",
- "rand 0.10.1",
- "regex",
- "rsasl",
- "rustls",
- "rustls-native-certs",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "slatedb",
- "tansu-sans-io",
- "tansu-schema",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-postgres",
- "tokio-postgres-rustls",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "turso",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "tansu-topic"
-version = "0.6.0"
-dependencies = [
- "futures",
- "futures-core",
- "futures-util",
- "serde",
- "serde_json",
- "tansu-client",
- "tansu-sans-io",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
-]
 
 [[package]]
 name = "tap"
