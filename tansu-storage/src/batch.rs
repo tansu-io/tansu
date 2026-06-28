@@ -624,6 +624,10 @@ where
         self.storage.maintain(now).await
     }
 
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        self.storage.maintain_transactions(now).await
+    }
+
     async fn cluster_id(&self) -> Result<String> {
         self.storage.cluster_id().await
     }
@@ -935,6 +939,10 @@ mod tests {
         }
 
         async fn maintain(&self, _now: SystemTime) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
             unimplemented!()
         }
 

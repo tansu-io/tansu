@@ -39,7 +39,7 @@ use tansu_storage::{ArcDynStorage, BrokerRegistrationRequest, Storage, StorageCo
 use tokio::{
     net::TcpListener,
     signal::unix::{SignalKind, signal},
-    task::JoinSet,
+    task::{AbortHandle, JoinSet},
     time::{self, Instant, sleep},
 };
 use tokio_rustls::TlsAcceptor;
@@ -62,6 +62,7 @@ pub struct Broker<G, S> {
     tls_server_config: Option<Arc<ServerConfig>>,
     silent: bool,
     maintenance_interval: Option<Duration>,
+    transaction_maintenance_interval: Option<Duration>,
 
     cancellation: CancellationToken,
 }
@@ -96,6 +97,7 @@ where
             silent: false,
 
             maintenance_interval: None,
+            transaction_maintenance_interval: None,
 
             cancellation: CancellationToken::new(),
         }
@@ -240,6 +242,21 @@ where
         let mut interval =
             time::interval(self.maintenance_interval.unwrap_or(Duration::from_mins(10)));
 
+        let mut txn_interval = time::interval(
+            self.transaction_maintenance_interval
+                .unwrap_or(Duration::from_secs(10)),
+        );
+
+        // Periodic sweeps: skip missed ticks rather than firing them in a burst.
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        txn_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+
+        // Track the in-flight sweep per interval so a sweep slower than its
+        // interval can't overlap itself or pile up: skip the tick while the
+        // previous sweep is still running.
+        let mut maintenance_sweep: Option<AbortHandle> = None;
+        let mut txn_sweep: Option<AbortHandle> = None;
+
         let mut set = JoinSet::new();
 
         let m = MultiProgress::new();
@@ -332,20 +349,49 @@ where
                 }
 
                 _ = interval.tick() => {
-                    let storage = self.storage.clone();
+                    if maintenance_sweep.as_ref().is_some_and(|handle| !handle.is_finished()) {
+                        debug!("maintain still in flight; skipping tick");
+                    } else {
+                        let storage = self.storage.clone();
 
+                        let handle = set.spawn(async move {
+                            let span = span!(Level::DEBUG, "maintenance");
 
-                    let handle = set.spawn(async move {
-                        let span = span!(Level::DEBUG, "maintenance");
+                            async move {
+                                if let Err(err) = storage.maintain(SystemTime::now()).await {
+                                    debug!(?err);
+                                }
+                            }
+                            .instrument(span)
+                            .await
+                        });
 
-                        async move {
-                            _ = storage.maintain(SystemTime::now()).await.inspect(|maintain|debug!(?maintain)).inspect_err(|err|debug!(?err)).ok();
+                        debug!(?handle);
+                        maintenance_sweep = Some(handle);
+                    }
+                }
 
-                        }.instrument(span).await
+                _ = txn_interval.tick() => {
+                    if txn_sweep.as_ref().is_some_and(|handle| !handle.is_finished()) {
+                        debug!("maintain_transactions still in flight; skipping tick");
+                    } else {
+                        let storage = self.storage.clone();
 
-                    });
+                        let handle = set.spawn(async move {
+                            let span = span!(Level::DEBUG, "maintain_transactions");
 
-                    debug!(?handle);
+                            async move {
+                                if let Err(err) = storage.maintain_transactions(SystemTime::now()).await {
+                                    debug!(?err);
+                                }
+                            }
+                            .instrument(span)
+                            .await
+                        });
+
+                        debug!(?handle);
+                        txn_sweep = Some(handle);
+                    }
                 }
 
                 v = set.join_next(), if !set.is_empty() => {
@@ -384,6 +430,7 @@ pub struct Builder<N, C, I, A, S, L> {
     tls_server_config: Option<ServerConfig>,
     silent: bool,
     maintenance_interval: Option<Duration>,
+    transaction_maintenance_interval: Option<Duration>,
 
     cancellation: CancellationToken,
 }
@@ -399,6 +446,7 @@ type PhantomBuilder = Builder<
 
 impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
     const MAINTENANCE_INTERVAL: &str = "maintenance_interval";
+    const TRANSACTION_MAINTENANCE_INTERVAL: &str = "transaction_maintenance_interval";
 
     pub fn node_id(self, node_id: i32) -> Builder<i32, C, I, A, S, L> {
         Builder {
@@ -415,7 +463,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
-
+            transaction_maintenance_interval: self.transaction_maintenance_interval,
             cancellation: self.cancellation,
         }
     }
@@ -435,6 +483,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
+            transaction_maintenance_interval: self.transaction_maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -455,6 +504,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
+            transaction_maintenance_interval: self.transaction_maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -478,6 +528,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
+            transaction_maintenance_interval: self.transaction_maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -492,10 +543,18 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             }
         });
 
+        let transaction_maintenance_interval = storage.query_pairs().find_map(|(k, v)| {
+            if k == Self::TRANSACTION_MAINTENANCE_INTERVAL {
+                v.parse::<humantime::Duration>().map(Into::into).ok()
+            } else {
+                None
+            }
+        });
+
         let pairs = storage
             .query_pairs()
             .filter_map(|(k, v)| {
-                if k == Self::MAINTENANCE_INTERVAL {
+                if k == Self::MAINTENANCE_INTERVAL || k == Self::TRANSACTION_MAINTENANCE_INTERVAL {
                     None
                 } else {
                     Some((k.to_string(), v.to_string()))
@@ -509,7 +568,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             _ = storage.query_pairs_mut().clear().extend_pairs(pairs);
         }
 
-        debug!(?maintenance_interval, %storage);
+        debug!(?maintenance_interval, ?transaction_maintenance_interval, %storage);
 
         Builder {
             node_id: self.node_id,
@@ -525,6 +584,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval,
+            transaction_maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -547,6 +607,7 @@ impl<N, C, I, A, S, L> Builder<N, C, I, A, S, L> {
             tls_server_config: self.tls_server_config,
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
+            transaction_maintenance_interval: self.transaction_maintenance_interval,
 
             cancellation: self.cancellation,
         }
@@ -636,6 +697,7 @@ impl Builder<i32, String, Uuid, Url, Url, Url> {
 
             silent: self.silent,
             maintenance_interval: self.maintenance_interval,
+            transaction_maintenance_interval: self.transaction_maintenance_interval,
             cancellation: self.cancellation,
         })
     }
