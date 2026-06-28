@@ -1996,6 +1996,17 @@ impl Storage for Engine {
     }
 
     #[instrument(skip_all)]
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner.maintain_transactions(now).await.inspect(|_| {
+            ENGINE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "maintain_transactions")],
+            )
+        })
+    }
+
+    #[instrument(skip_all)]
     async fn cluster_id(&self) -> Result<String> {
         let start = SystemTime::now();
         self.inner.cluster_id().await.inspect(|_| {
@@ -4697,6 +4708,10 @@ impl Storage for Delegate {
                 &[KeyValue::new("operation", "txn_end")],
             )
         })
+    }
+
+    async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
+        Ok(())
     }
 
     async fn maintain(&self, now: SystemTime) -> Result<()> {
