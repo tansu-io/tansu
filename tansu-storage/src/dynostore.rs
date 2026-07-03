@@ -498,9 +498,7 @@ impl DynoStore {
     }
 
     /// The metadata for the least batch at or after `probe` in the partition,
-    /// or `None` when no batch starts at or after it. Record objects are keyed
-    /// by zero-padded base offset, so a prefix listing that starts just before
-    /// `probe` yields the next base offset first.
+    /// or `None` when no batch starts at or after it.
     async fn batch_meta_at_or_after(
         &self,
         topition: &Topition,
@@ -511,7 +509,7 @@ impl DynoStore {
             self.cluster, topition.topic, topition.partition,
         ));
 
-        let mut list_stream = if probe > 0 {
+        let list_stream = if probe > 0 {
             let start_after = Path::from(format!(
                 "clusters/{}/topics/{}/partitions/{:0>10}/records/{:0>20}.batch",
                 self.cluster,
@@ -527,9 +525,16 @@ impl DynoStore {
         };
 
         list_stream
-            .next()
+            // `ObjectStore::list_with_offset` does not guarantee the order of returned
+            // metadata, so this selects the least key across the whole listing rather
+            // than relying on the first item yielded.
+            .try_fold(None, |least: Option<ObjectMeta>, meta| async move {
+                Ok(match least {
+                    Some(least) if least.location <= meta.location => Some(least),
+                    _ => Some(meta),
+                })
+            })
             .await
-            .transpose()
             .inspect_err(|error| error!(?error, ?topition, probe))
             .map_err(|_| Error::Api(ErrorCode::UnknownServerError))
     }
