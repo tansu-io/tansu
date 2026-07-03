@@ -3658,6 +3658,10 @@ impl Storage for Postgres {
         Ok(())
     }
 
+    async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
+        Ok(())
+    }
+
     async fn delete_user_scram_credential(
         &self,
         user: &str,

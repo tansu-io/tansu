@@ -523,6 +523,10 @@ where
         self.storage.maintain(now).await
     }
 
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        self.storage.maintain_transactions(now).await
+    }
+
     async fn cluster_id(&self) -> Result<String> {
         self.storage.cluster_id().await
     }

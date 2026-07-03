@@ -1515,9 +1515,10 @@ pub trait Storage: Debug + Send + Sync + 'static {
     ) -> Result<ErrorCode>;
 
     /// Run periodic maintenance on this storage.
-    async fn maintain(&self, _now: SystemTime) -> Result<()> {
-        Ok(())
-    }
+    async fn maintain(&self, _now: SystemTime) -> Result<()>;
+
+    /// Abort transactions whose timeout has elapsed, releasing the Last Stable Offset they pin.
+    async fn maintain_transactions(&self, _now: SystemTime) -> Result<()>;
 
     async fn cluster_id(&self) -> Result<String>;
 
@@ -1768,6 +1769,10 @@ where
 
     async fn maintain(&self, now: SystemTime) -> Result<()> {
         self.as_ref().maintain(now).await
+    }
+
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        self.as_ref().maintain_transactions(now).await
     }
 
     async fn cluster_id(&self) -> Result<String> {
@@ -2023,6 +2028,10 @@ where
 
     async fn maintain(&self, now: SystemTime) -> Result<()> {
         self.as_ref().maintain(now).await
+    }
+
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        self.as_ref().maintain_transactions(now).await
     }
 
     async fn cluster_id(&self) -> Result<String> {
@@ -3540,6 +3549,39 @@ impl Storage for StorageContainer {
 
             #[cfg(feature = "turso")]
             Self::Turso(engine) => engine.maintain(now),
+        }
+        .await
+        .inspect(|maintain| {
+            debug!(?maintain);
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|err| {
+            debug!(?err);
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        let attributes = [KeyValue::new("method", "maintain_transactions")];
+
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => engine.maintain_transactions(now),
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.maintain_transactions(now),
+
+            Self::Null(engine) => engine.maintain_transactions(now),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => engine.maintain_transactions(now),
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => engine.maintain_transactions(now),
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => engine.maintain_transactions(now),
         }
         .await
         .inspect(|maintain| {

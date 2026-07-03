@@ -389,6 +389,12 @@ where
         self.storage.maintain(now).await
     }
 
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        self.introduce_latency().await?;
+
+        self.storage.maintain_transactions(now).await
+    }
+
     async fn cluster_id(&self) -> Result<String> {
         self.introduce_latency().await?;
 

@@ -2675,6 +2675,10 @@ impl Storage for DynoStore {
         Ok(())
     }
 
+    async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
+        Ok(())
+    }
+
     async fn cluster_id(&self) -> Result<String> {
         Ok(self.cluster.clone())
     }

@@ -495,6 +495,11 @@ impl Storage for Engine {
     }
 
     #[instrument(skip_all)]
+    async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
     async fn cluster_id(&self) -> Result<String> {
         Ok(self.cluster.clone())
     }

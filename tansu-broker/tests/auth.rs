@@ -1000,6 +1000,11 @@ impl Storage for Engine {
     }
 
     #[instrument(skip_all)]
+    async fn maintain_transactions(&self, _now: SystemTime) -> tansu_storage::Result<()> {
+        unimplemented!()
+    }
+
+    #[instrument(skip_all)]
     async fn cluster_id(&self) -> tansu_storage::Result<String> {
         unimplemented!()
     }
