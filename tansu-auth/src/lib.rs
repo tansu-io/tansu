@@ -104,9 +104,10 @@ impl Authentication {
     }
 
     pub fn is_authenticated(&self) -> bool {
+        // require a validated identity: SCRAM finishes even on a bad proof
         self.stage
             .lock()
-            .map(|guard| matches!(guard.as_ref(), Some(Stage::Finished(_))))
+            .map(|guard| matches!(guard.as_ref(), Some(Stage::Finished(Some(_)))))
             .ok()
             .unwrap_or_default()
     }
