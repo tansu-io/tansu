@@ -17,7 +17,7 @@ use rsasl::{
     config::SASLConfig,
     mechanisms::scram::properties::ScramStoredPassword,
     prelude::{SASLError, SASLServer, Session, SessionError, Validation},
-    property::{AuthId, AuthzId, Password},
+    property::{AuthId, AuthzId},
     validate::{Validate, ValidationError},
 };
 use std::{
@@ -180,25 +180,11 @@ where
         debug!(mechanism = %session_data.mechanism().mechanism);
 
         if session_data.mechanism().mechanism == "PLAIN" {
-            Ok(context
-                .get_ref::<Password>()
-                .ok_or(AuthError::MissingProperty {
-                    mechanism: session_data.mechanism().mechanism.to_string(),
-                    property: "Password".into(),
-                })
-                .and(
-                    context
-                        .get_ref::<AuthId>()
-                        .inspect(|auth_id| {
-                            debug!(mechanism = %session_data.mechanism().mechanism, auth_id)
-                        })
-                        .ok_or(AuthError::MissingProperty {
-                            mechanism: session_data.mechanism().mechanism.to_string(),
-                            property: "AuthId".into(),
-                        }).map(ToString::to_string).map(|auth_id| {
-                            Success { auth_id }
-                        })
-                ))
+            // tansu stores only SCRAM keys; a bare PLAIN password can't be
+            // verified, so refuse PLAIN rather than accept it unchecked
+            Ok(Err(AuthError::UnknownMechanism(
+                session_data.mechanism().mechanism.to_string(),
+            )))
         } else if session_data.mechanism().mechanism.starts_with("SCRAM-") {
             Ok(context
                 .get_ref::<AuthId>()
