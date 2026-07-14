@@ -48,6 +48,7 @@ use tansu_sans_io::{
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
     },
+    fetch_response::AbortedTransaction,
     incremental_alter_configs_request::AlterConfigsResource,
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
@@ -3660,6 +3661,15 @@ impl Storage for Postgres {
 
     async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
         Ok(())
+    }
+
+    async fn aborted_transactions(
+        &self,
+        _topition: &Topition,
+        _offset: i64,
+        _last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        Ok(vec![])
     }
 
     async fn delete_user_scram_credential(
