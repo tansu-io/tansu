@@ -53,6 +53,24 @@ Tansu is a single statically linked binary containing the following:
 - **cat** a CLI to consume or produce Avro, JSON or Protobuf messages to a topic
 - **proxy** an Apache Kafka compatible proxy
 
+# Next Steps
+
+## Quickstart
+
+Start quickly by setting up a Tansu broker via:
+
+- **Docker** (recommended)
+  - [S3-based engine](#s3)
+  - [PostgreSQL-based engine](#postgresql)
+- **Local installation**
+  - [Build and run locally](#local)
+
+## Learn Tansu
+
+- **[The CLI tools](#cli)
+
+# CLI
+
 ## broker
 
 The broker subcommand is default if no other command is supplied.
@@ -85,8 +103,8 @@ Options:
           Apache Iceberg Catalog, examples are: http://localhost:8181/ [env: ICEBERG_CATALOG=http://localhost:8181/]
       --iceberg-namespace <ICEBERG_NAMESPACE>
           Iceberg namespace [env: ICEBERG_NAMESPACE=] [default: tansu]
-      --prometheus-listener-url <PROMETHEUS_LISTENER_URL>
-          Broker metrics can be scraped by Prometheus from this URL [env: PROMETHEUS_LISTENER_URL=tcp://0.0.0.0:9100] [default: tcp://[::]:9100]
+      --otlp-endpoint-url <OTLP_ENDPOINT_URL>
+          OTEL Exporter OTLP endpoint for pushing metrics and traces [env: OTEL_EXPORTER_OTLP_ENDPOINT=]
   -h, --help
           Print help
   -V, --version
@@ -177,6 +195,15 @@ Results in the following output:
 |-----------+---------+---------------+-------------+---------------|
 ```
 
+# Install
+
+```shell
+git clone https://github.com/tansu-io/tansu
+cd tansu
+```
+
+
+## Docker
 
 ### s3
 
@@ -372,11 +399,22 @@ Consumer:
   -b localhost:9092
 ```
 
-## Feedback
+## Local
+
+```shell
+cargo install --path tansu --all-features
+~/.cargo/bin/tansu -h
+```
+
+### Postgres
+
+For now, you have to manually run the [initdb script](etc/initdb.d/010-schema.sql) before starting tansu for the first time.
+
+# Feedback
 
 Please [raise an issue][tansu-issues] if you encounter a problem.
 
-## License
+# License
 
 Tansu is licensed under [Apache 2.0][apache-license].
 
