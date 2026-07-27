@@ -168,11 +168,10 @@ jobs:
       - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
   compat-librdkafka:
-    if: ${{matrix.storage.enabled}}
     runs-on: ${{matrix.os}}
-    continue-on-error: true
+    continue-on-error: ${{ matrix.storage.experimental }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os:
           - ubuntu-latest
@@ -180,19 +179,19 @@ jobs:
           - name: memory
             engine: memory://
             features: dynostore
-            enabled: true
+            experimental: false
           - name: s3
             engine: s3://tansu/
             features: dynostore
-            enabled: false
+            experimental: true
           - name: postgres
             engine: postgres://postgres:postgres@localhost
             features: postgres
-            enabled: false
+            experimental: true
           - name: sqlite
             engine: sqlite://tansu.db
             features: libsql
-            enabled: false
+            experimental: true
     env:
       ADVERTISED_LISTENER_URL: tcp://localhost:9092
       AWS_ACCESS_KEY_ID: minioadmin
@@ -248,11 +247,10 @@ jobs:
                 "${f}"
           done | sort >> "${GITHUB_STEP_SUMMARY}"
   compat-franz-go:
-    if: ${{matrix.storage.enabled}}
     runs-on: ${{matrix.os}}
-    continue-on-error: true
+    continue-on-error: ${{ matrix.storage.experimental }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os:
           - ubuntu-latest
@@ -260,19 +258,19 @@ jobs:
           - name: memory
             engine: memory://
             features: dynostore
-            enabled: true
+            experimental: false
           - name: s3
             engine: s3://tansu/
             features: dynostore
-            enabled: false
+            experimental: true
           - name: postgres
             engine: postgres://postgres:postgres@localhost
             features: postgres
-            enabled: false
+            experimental: true
           - name: sqlite
             engine: sqlite://tansu.db
             features: libsql
-            enabled: false
+            experimental: true
     env:
       ADVERTISED_LISTENER_URL: tcp://localhost:9092
       AWS_ACCESS_KEY_ID: minioadmin
