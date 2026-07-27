@@ -176,6 +176,7 @@ use tansu_sans_io::{
     describe_topic_partitions_request::{Cursor, TopicRequest},
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
     fetch_request::FetchTopic,
+    fetch_response::AbortedTransaction,
     incremental_alter_configs_request::AlterConfigsResource,
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     join_group_response::JoinGroupResponseMember,
@@ -1520,6 +1521,16 @@ pub trait Storage: Debug + Send + Sync + 'static {
     /// Abort transactions whose timeout has elapsed, releasing the Last Stable Offset they pin.
     async fn maintain_transactions(&self, _now: SystemTime) -> Result<()>;
 
+    /// Aborted transactions overlapping `[offset, last_stable_offset)`, reporting which producer
+    /// ranges a `read_committed` Fetch client should discard. Postgres implements this; other
+    /// backends return `Ok(vec![])` or forward to an inner storage.
+    async fn aborted_transactions(
+        &self,
+        _topition: &Topition,
+        _offset: i64,
+        _last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>>;
+
     async fn cluster_id(&self) -> Result<String>;
 
     async fn node(&self) -> Result<i32>;
@@ -1773,6 +1784,17 @@ where
 
     async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
         self.as_ref().maintain_transactions(now).await
+    }
+
+    async fn aborted_transactions(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        self.as_ref()
+            .aborted_transactions(topition, offset, last_stable_offset)
+            .await
     }
 
     async fn cluster_id(&self) -> Result<String> {
@@ -2032,6 +2054,17 @@ where
 
     async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
         self.as_ref().maintain_transactions(now).await
+    }
+
+    async fn aborted_transactions(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        self.as_ref()
+            .aborted_transactions(topition, offset, last_stable_offset)
+            .await
     }
 
     async fn cluster_id(&self) -> Result<String> {
@@ -3586,6 +3619,52 @@ impl Storage for StorageContainer {
         .await
         .inspect(|maintain| {
             debug!(?maintain);
+            STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
+        })
+        .inspect_err(|err| {
+            debug!(?err);
+            STORAGE_CONTAINER_ERRORS.add(1, &attributes);
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn aborted_transactions(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        let attributes = [KeyValue::new("method", "aborted_transactions")];
+
+        match self {
+            #[cfg(feature = "dynostore")]
+            Self::DynoStore(engine) => {
+                engine.aborted_transactions(topition, offset, last_stable_offset)
+            }
+
+            #[cfg(feature = "libsql")]
+            Self::Lite(engine) => engine.aborted_transactions(topition, offset, last_stable_offset),
+
+            Self::Null(engine) => engine.aborted_transactions(topition, offset, last_stable_offset),
+
+            #[cfg(feature = "postgres")]
+            Self::Postgres(engine) => {
+                engine.aborted_transactions(topition, offset, last_stable_offset)
+            }
+
+            #[cfg(feature = "slatedb")]
+            Self::Slate(engine) => {
+                engine.aborted_transactions(topition, offset, last_stable_offset)
+            }
+
+            #[cfg(feature = "turso")]
+            Self::Turso(engine) => {
+                engine.aborted_transactions(topition, offset, last_stable_offset)
+            }
+        }
+        .await
+        .inspect(|aborted_transactions| {
+            debug!(?aborted_transactions);
             STORAGE_CONTAINER_REQUESTS.add(1, &attributes);
         })
         .inspect_err(|err| {

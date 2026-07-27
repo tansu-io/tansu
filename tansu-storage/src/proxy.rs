@@ -28,7 +28,7 @@ use tansu_sans_io::{
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
-    incremental_alter_configs_request::AlterConfigsResource,
+    fetch_response::AbortedTransaction, incremental_alter_configs_request::AlterConfigsResource,
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup, record::deflated,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
@@ -525,6 +525,17 @@ where
 
     async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
         self.storage.maintain_transactions(now).await
+    }
+
+    async fn aborted_transactions(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        self.storage
+            .aborted_transactions(topition, offset, last_stable_offset)
+            .await
     }
 
     async fn cluster_id(&self) -> Result<String> {
