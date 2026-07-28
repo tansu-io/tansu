@@ -303,27 +303,23 @@ jobs:
     if: always()
     needs: [compat-franz-go]
     runs-on: ubuntu-latest
+    env:
+      DUCKDB_CLI: /home/runner/.duckdb/cli/latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            .github/workflows/scripts/pivot-integration-report.sql
+          sparse-checkout-cone-mode: false
+          path: reports
       - uses: actions/download-artifact@v8
         with:
           pattern: compat-franz-go-results-*
           path: results
           merge-multiple: true
-      - run: |
-          {
-            echo "## franz-go compatibility report card"
-            echo
-            echo "| storage engine | test | result |"
-            echo "|---|---|---|"
-          } >> "${GITHUB_STEP_SUMMARY}"
-          for f in results/results-*.csv; do
-            [[ -e "${f}" ]] || continue
-            storage="$(basename "${f}" .csv)"
-            storage="${storage#results-}"
-            awk -F, -v s="${storage}" \
-                '{printf "| %s | %s | %s |\n", s, $1, ($2 == "PASS" ? "✅ PASS" : "❌ FAIL")}' \
-                "${f}"
-          done | sort >> "${GITHUB_STEP_SUMMARY}"
+      - run: curl https://install.duckdb.org | sh
+      - run: echo "## franz-go compatibility report card" >> "${GITHUB_STEP_SUMMARY}"
+      - run: $DUCKDB_CLI/duckdb -markdown -f reports/.github/workflows/scripts/pivot-integration-report.sql >> "${GITHUB_STEP_SUMMARY}"
   cargo-publish-dry-run:
     runs-on: ${{matrix.os}}
     strategy:
