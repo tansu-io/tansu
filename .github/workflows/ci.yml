@@ -228,26 +228,15 @@ jobs:
     needs: [compat-librdkafka]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v8
         with:
           pattern: compat-librdkafka-results-*
           path: results
           merge-multiple: true
-      - run: |
-          {
-            echo "## librdkafka compatibility report card"
-            echo
-            echo "| storage engine | test | result |"
-            echo "|---|---|---|"
-          } >> "${GITHUB_STEP_SUMMARY}"
-          for f in results/results-*.csv; do
-            [[ -e "${f}" ]] || continue
-            storage="$(basename "${f}" .csv)"
-            storage="${storage#results-}"
-            awk -F, -v s="${storage}" \
-                '{printf "| %s | %s | %s |\n", s, $1, ($2 == "PASS" ? "✅ PASS" : "❌ FAIL")}' \
-                "${f}"
-          done | sort >> "${GITHUB_STEP_SUMMARY}"
+      - run: curl https://install.duckdb.org | sh
+      - run: echo "## librdkafka compatibility report card" >> "${GITHUB_STEP_SUMMARY}"
+      - run: duckdb -markdown -f "${{ github.workspace }}/.github/workflows/scripts/pivot-integration-report.sql" >> "${GITHUB_STEP_SUMMARY}"
   compat-franz-go:
     runs-on: ${{matrix.os}}
     continue-on-error: ${{ matrix.storage.experimental }}
