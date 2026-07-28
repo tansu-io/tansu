@@ -227,8 +227,15 @@ jobs:
     if: always()
     needs: [compat-librdkafka]
     runs-on: ubuntu-latest
+    env:
+      DUCKDB_CLI: /home/runner/.duckdb/cli/latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            .github/workflows/scripts/pivot-integration-report.sql
+          sparse-checkout-cone-mode: false
+          path: scripts
       - uses: actions/download-artifact@v8
         with:
           pattern: compat-librdkafka-results-*
@@ -236,7 +243,7 @@ jobs:
           merge-multiple: true
       - run: curl https://install.duckdb.org | sh
       - run: echo "## librdkafka compatibility report card" >> "${GITHUB_STEP_SUMMARY}"
-      - run: duckdb -markdown -f "${{ github.workspace }}/.github/workflows/scripts/pivot-integration-report.sql" >> "${GITHUB_STEP_SUMMARY}"
+      - run: $DUCKDB_CLI/duckdb -markdown -f scripts/pivot-integration-report.sql >> "${GITHUB_STEP_SUMMARY}"
   compat-franz-go:
     runs-on: ${{matrix.os}}
     continue-on-error: ${{ matrix.storage.experimental }}
