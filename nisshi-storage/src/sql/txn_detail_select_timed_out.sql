@@ -1,5 +1,5 @@
 -- -*- mode: sql; sql-product: postgres; -*-
--- Copyright ⓒ 2024-2025 Peter Morgan <peter.james.morgan@gmail.com>
+-- Copyright ⓒ 2024-2026 Peter Morgan <peter.james.morgan@gmail.com>
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
 -- you may not use this file except in compliance with the License.
@@ -13,12 +13,10 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-update txn_detail
+-- prepare txn_detail_select_timed_out (text, timestamp) as
+-- Returns transactions still in BEGIN past their timeout, for the abort sweep.
 
-set
-
-started_at = current_timestamp,
-status = 'BEGIN'
+select txn.name, p.id, pe.epoch
 
 from
 
@@ -26,19 +24,14 @@ cluster c
 join producer p on p.cluster = c.id
 join producer_epoch pe on pe.producer = p.id
 join txn on txn.cluster = c.id and txn.producer = p.id
+join txn_detail txn_d on txn_d."transaction" = txn.id and txn_d.producer_epoch = pe.id
 
 where
 
 c.name = $1
-and txn.name = $2
-and p.id = $3
-and pe.epoch = $4
-and txn_detail."transaction" = txn.id
-and txn_detail.producer_epoch = pe.id
--- Reset only a fresh row or one whose previous transaction has resolved --
--- never one still in flight (BEGIN/PREPARE_*). No started_at check needed:
--- it is only ever set together with status, so status alone decides.
-and (
-    txn_detail.status is null
-    or txn_detail.status in ('COMMITTED', 'ABORTED')
-);
+and txn_d.status = 'BEGIN'
+and txn_d.started_at is not null
+-- $2 is the sweep's "now": the transaction has timed out when more than its
+-- own transaction_timeout_ms of elapsed time separates it from started_at.
+and (extract(epoch from cast($2 as timestamp)) - extract(epoch from txn_d.started_at)) * 1000
+    > txn_d.transaction_timeout_ms;

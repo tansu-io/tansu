@@ -334,7 +334,10 @@ create table if not exists txn_detail (
     -- AddPartitionsToTxnRequest:
     -- If this is the first partition added to the transaction,
     -- the coordinator will also start the transaction timer
-    started_at timestamp,
+    --
+    -- timestamptz: the timeout sweep subtracts this from "now" to get elapsed
+    -- time; a zoneless timestamp would be off by the server's UTC offset.
+    started_at timestamptz,
     -- BEGIN, PREPARE_COMMIT, PREPARE_ABORT, COMMITTED or ABORTED
     --
     status text,
