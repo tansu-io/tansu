@@ -235,7 +235,7 @@ jobs:
           sparse-checkout: |
             .github/workflows/scripts/pivot-integration-report.sql
           sparse-checkout-cone-mode: false
-          path: scripts
+          path: reports
       - uses: actions/download-artifact@v8
         with:
           pattern: compat-librdkafka-results-*
@@ -243,7 +243,7 @@ jobs:
           merge-multiple: true
       - run: curl https://install.duckdb.org | sh
       - run: echo "## librdkafka compatibility report card" >> "${GITHUB_STEP_SUMMARY}"
-      - run: $DUCKDB_CLI/duckdb -markdown -f scripts/pivot-integration-report.sql >> "${GITHUB_STEP_SUMMARY}"
+      - run: $DUCKDB_CLI/duckdb -markdown -f reports/.github/workflows/scripts/pivot-integration-report.sql >> "${GITHUB_STEP_SUMMARY}"
   compat-franz-go:
     runs-on: ${{matrix.os}}
     continue-on-error: ${{ matrix.storage.experimental }}
