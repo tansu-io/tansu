@@ -739,6 +739,117 @@ where
     Ok(())
 }
 
+pub async fn multiple_records_per_batch<G>(
+    cluster_id: impl Into<String>,
+    broker_id: i32,
+    sc: G,
+) -> Result<()>
+where
+    G: Storage + Clone,
+{
+    register_broker(cluster_id, broker_id, &sc).await?;
+
+    let topic_name: String = alphanumeric_string(15);
+    debug!(?topic_name);
+
+    let num_partitions = 6;
+    let replication_factor = 0;
+    let assignments = Some([].into());
+    let configs = Some([].into());
+
+    let topic_id = sc
+        .create_topic(
+            CreatableTopic::default()
+                .name(topic_name.clone())
+                .num_partitions(num_partitions)
+                .replication_factor(replication_factor)
+                .assignments(assignments.clone())
+                .configs(configs.clone()),
+            false,
+        )
+        .await?;
+    debug!(?topic_id);
+
+    let partition_index = rng().random_range(0..num_partitions);
+    let topition = Topition::new(topic_name.clone(), partition_index);
+
+    // Each produce of several records is stored as a single batch object keyed
+    // by its base offset, so the two batches land at non-contiguous base
+    // offsets (0 and 3). A timestamp lookup between them must narrow the binary
+    // search by the probe midpoint, not the discovered base offset: a probe
+    // landing below a qualifying batch keeps re-discovering that batch, and
+    // narrowing by its base leaves the range unchanged and loops forever.
+    let before = SystemTime::now();
+    debug!(before = to_timestamp(&before)?);
+    sleep(Duration::from_millis(500)).await;
+
+    let first = inflated::Batch::builder()
+        .record(Record::builder().value(Bytes::from_static(b"one").into()))
+        .record(Record::builder().value(Bytes::from_static(b"two").into()))
+        .record(Record::builder().value(Bytes::from_static(b"three").into()))
+        .last_offset_delta(2)
+        .build()
+        .and_then(TryInto::try_into)?;
+
+    assert_eq!(
+        0,
+        sc.produce(None, &topition, first)
+            .await
+            .inspect(|offset| debug!(?offset))?
+    );
+
+    let between = SystemTime::now();
+    debug!(between = to_timestamp(&between)?);
+    sleep(Duration::from_millis(500)).await;
+
+    let second = inflated::Batch::builder()
+        .record(Record::builder().value(Bytes::from_static(b"four").into()))
+        .record(Record::builder().value(Bytes::from_static(b"five").into()))
+        .record(Record::builder().value(Bytes::from_static(b"six").into()))
+        .last_offset_delta(2)
+        .build()
+        .and_then(TryInto::try_into)?;
+
+    assert_eq!(
+        3,
+        sc.produce(None, &topition, second)
+            .await
+            .inspect(|offset| debug!(?offset))?
+    );
+
+    let after = SystemTime::now();
+    debug!(after = to_timestamp(&after)?);
+
+    // At or after `before`: the first batch, base offset 0.
+    let offsets = [(topition.clone(), ListOffset::Timestamp(before))];
+    let responses = sc
+        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+        .await
+        .inspect(|responses| debug!(?responses))?;
+    assert_eq!(1, responses.len());
+    assert_eq!(Some(0), responses[0].1.offset);
+
+    // At or after `between`: only the second batch qualifies, base offset 3.
+    let offsets = [(topition.clone(), ListOffset::Timestamp(between))];
+    let responses = sc
+        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+        .await
+        .inspect(|responses| debug!(?responses))?;
+    assert_eq!(1, responses.len());
+    assert_eq!(Some(3), responses[0].1.offset);
+
+    // After both batches were written: nothing qualifies, offset 0.
+    let offsets = [(topition.clone(), ListOffset::Timestamp(after))];
+    let responses = sc
+        .list_offsets(IsolationLevel::ReadUncommitted, &offsets[..])
+        .await
+        .inspect(|responses| debug!(?responses))?;
+    assert_eq!(1, responses.len());
+    assert_eq!(Some(0), responses[0].1.offset);
+
+    Ok(())
+}
+
 #[cfg(feature = "postgres")]
 mod pg {
     use std::sync::Arc;
@@ -796,6 +907,21 @@ mod pg {
         let broker_id = rng().random_range(0..i32::MAX);
 
         super::single_record(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn multiple_records_per_batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::multiple_records_per_batch(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id).await?,
@@ -867,6 +993,21 @@ mod in_memory {
         )
         .await
     }
+
+    #[tokio::test]
+    async fn multiple_records_per_batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::multiple_records_per_batch(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
 }
 
 #[cfg(feature = "libsql")]
@@ -932,6 +1073,21 @@ mod lite {
         )
         .await
     }
+
+    #[tokio::test]
+    async fn multiple_records_per_batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::multiple_records_per_batch(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
 }
 
 #[cfg(feature = "slatedb")]
@@ -991,6 +1147,21 @@ mod slatedb {
         let broker_id = rng().random_range(0..i32::MAX);
 
         super::single_record(
+            cluster_id,
+            broker_id,
+            storage_container(cluster_id, broker_id).await?,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn multiple_records_per_batch() -> Result<()> {
+        let _guard = init_tracing()?;
+
+        let cluster_id = Uuid::now_v7();
+        let broker_id = rng().random_range(0..i32::MAX);
+
+        super::multiple_records_per_batch(
             cluster_id,
             broker_id,
             storage_container(cluster_id, broker_id).await?,
