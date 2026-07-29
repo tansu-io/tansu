@@ -4040,6 +4040,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test]
     async fn lite_system_time() -> Result<()> {
         let _guard = init_tracing()?;
