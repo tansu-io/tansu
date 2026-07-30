@@ -1,6 +1,6 @@
 <div align="center">
 
-# Nisshi 🗃️
+# Nisshi (née Tansu) 🗃️
 stateless Kafka-compatible broker with pluggable storage (PostgreSQL, SQLite, S3, memory)
 
 <br>
@@ -17,7 +17,7 @@ stateless Kafka-compatible broker with pluggable storage (PostgreSQL, SQLite, S3
 <br>
 [![GitHub stars](https://img.shields.io/github/stars/nisshi-io/nisshi?style=social)](https://github.com/nisshi-io/nisshi)
 &nbsp;
-[![Bluesky](https://img.shields.io/bluesky/followers/nisshi.io)](https://bsky.app/profile/nisshi.io)
+[![Bluesky](https://img.shields.io/bluesky/followers/nisshi.io)](https://bsky.app/profile/tansu.io)
 
 <br>
 
@@ -25,7 +25,7 @@ stateless Kafka-compatible broker with pluggable storage (PostgreSQL, SQLite, S3
 
 # What is Nisshi?
 
-[Nisshi][github-com-nisshi-io] is a drop-in replacement for
+[Nisshi][github-com-nisshi-io] (née Tansu) is a drop-in replacement for
 Apache Kafka with PostgreSQL, libSQL (SQLite), S3 or memory storage engines.
 Schema backed topics (Avro, JSON or Protocol buffers) can
 be written as [Apache Iceberg](https://iceberg.apache.org) or [Delta Lake](https://delta.io) tables.
