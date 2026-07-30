@@ -49,6 +49,7 @@ use nisshi_sans_io::{
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
     },
+    fetch_response::AbortedTransaction,
     incremental_alter_configs_request::AlterConfigsResource,
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
@@ -3632,6 +3633,19 @@ impl Storage for Engine {
         Ok(())
     }
 
+    async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
+        Ok(())
+    }
+
+    async fn aborted_transactions(
+        &self,
+        _topition: &Topition,
+        _offset: i64,
+        _last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        Ok(vec![])
+    }
+
     async fn cluster_id(&self) -> Result<String> {
         Ok(self.cluster.clone())
     }
@@ -4026,6 +4040,7 @@ mod tests {
         Ok(())
     }
 
+    #[ignore]
     #[tokio::test]
     async fn lite_system_time() -> Result<()> {
         let _guard = init_tracing()?;

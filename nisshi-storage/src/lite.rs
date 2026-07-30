@@ -57,6 +57,7 @@ use nisshi_sans_io::{
     describe_topic_partitions_response::{
         DescribeTopicPartitionsResponsePartition, DescribeTopicPartitionsResponseTopic,
     },
+    fetch_response::AbortedTransaction,
     incremental_alter_configs_request::AlterConfigsResource,
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
@@ -1993,6 +1994,36 @@ impl Storage for Engine {
                 &[KeyValue::new("operation", "maintain")],
             )
         })
+    }
+
+    #[instrument(skip_all)]
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        let start = SystemTime::now();
+        self.inner.maintain_transactions(now).await.inspect(|_| {
+            ENGINE_REQUEST_DURATION.record(
+                elapsed_millis(start),
+                &[KeyValue::new("operation", "maintain_transactions")],
+            )
+        })
+    }
+
+    #[instrument(skip_all)]
+    async fn aborted_transactions(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        let start = SystemTime::now();
+        self.inner
+            .aborted_transactions(topition, offset, last_stable_offset)
+            .await
+            .inspect(|_| {
+                ENGINE_REQUEST_DURATION.record(
+                    elapsed_millis(start),
+                    &[KeyValue::new("operation", "aborted_transactions")],
+                )
+            })
     }
 
     #[instrument(skip_all)]
@@ -4697,6 +4728,19 @@ impl Storage for Delegate {
                 &[KeyValue::new("operation", "txn_end")],
             )
         })
+    }
+
+    async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
+        Ok(())
+    }
+
+    async fn aborted_transactions(
+        &self,
+        _topition: &Topition,
+        _offset: i64,
+        _last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        Ok(vec![])
     }
 
     async fn maintain(&self, now: SystemTime) -> Result<()> {

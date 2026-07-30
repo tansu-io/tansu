@@ -74,7 +74,7 @@ use nisshi_sans_io::{
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
-    incremental_alter_configs_request::AlterConfigsResource,
+    fetch_response::AbortedTransaction, incremental_alter_configs_request::AlterConfigsResource,
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup, record::deflated,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
@@ -188,6 +188,12 @@ pub enum Request {
         committed: bool,
     },
     Maintain(SystemTime),
+    MaintainTransactions(SystemTime),
+    AbortedTransactions {
+        topition: Topition,
+        offset: i64,
+        last_stable_offset: i64,
+    },
     ClusterId,
     Node,
     AdvertisedListener,
@@ -227,6 +233,8 @@ impl Display for Request {
             Self::ListGroups(_) => f.write_str("ListGroups"),
             Self::ListOffsets { .. } => f.write_str("ListOffsets"),
             Self::Maintain(_) => f.write_str("Maintain"),
+            Self::MaintainTransactions(_) => f.write_str("MaintainTransactions"),
+            Self::AbortedTransactions { .. } => f.write_str("AbortedTransactions"),
             Self::Metadata(_) => f.write_str("Metadata"),
             Self::Node => f.write_str("Node"),
             Self::OffsetCommit { .. } => f.write_str("OffsetCommit"),
@@ -267,6 +275,8 @@ pub enum Response {
     ListGroups(Result<Vec<ListedGroup>>),
     ListOffsets(Result<Vec<(Topition, ListOffsetResponse)>>),
     Maintain(Result<()>),
+    MaintainTransactions(Result<()>),
+    AbortedTransactions(Result<Vec<AbortedTransaction>>),
     Metadata(Result<MetadataResponse>),
     Node(Result<i32>),
     OffsetCommit(Result<Vec<(Topition, ErrorCode)>>),
@@ -1069,6 +1079,46 @@ impl Storage for RequestChannelService {
     }
 
     #[instrument(skip_all)]
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        self.serve(Context::default(), Request::MaintainTransactions(now))
+            .await
+            .and_then(|response| {
+                if let Response::MaintainTransactions(inner) = response {
+                    inner.map_err(Into::into)
+                } else {
+                    Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+                }
+            })
+            .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
+    async fn aborted_transactions(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        self.serve(
+            Context::default(),
+            Request::AbortedTransactions {
+                topition: topition.clone(),
+                offset,
+                last_stable_offset,
+            },
+        )
+        .await
+        .and_then(|response| {
+            if let Response::AbortedTransactions(inner) = response {
+                inner.map_err(Into::into)
+            } else {
+                Err(Error::UnexpectedServiceResponse(Box::new(response)).into())
+            }
+        })
+        .map_err(Into::into)
+    }
+
+    #[instrument(skip_all)]
     async fn cluster_id(&self) -> Result<String> {
         self.serve(Context::default(), Request::ClusterId)
             .await
@@ -1458,6 +1508,18 @@ where
                     .await,
             )),
             Request::Maintain(now) => Ok(Response::Maintain(self.storage.maintain(now).await)),
+            Request::MaintainTransactions(now) => Ok(Response::MaintainTransactions(
+                self.storage.maintain_transactions(now).await,
+            )),
+            Request::AbortedTransactions {
+                topition,
+                offset,
+                last_stable_offset,
+            } => Ok(Response::AbortedTransactions(
+                self.storage
+                    .aborted_transactions(&topition, offset, last_stable_offset)
+                    .await,
+            )),
             Request::ClusterId => Ok(Response::ClusterId(self.storage.cluster_id().await)),
             Request::Node => Ok(Response::Node(self.storage.node().await)),
             Request::AdvertisedListener => Ok(Response::AdvertisedListener(

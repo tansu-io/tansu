@@ -34,7 +34,7 @@ use nisshi_sans_io::{
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
-    incremental_alter_configs_request::AlterConfigsResource,
+    fetch_response::AbortedTransaction, incremental_alter_configs_request::AlterConfigsResource,
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup, record::deflated::Batch,
     txn_offset_commit_response::TxnOffsetCommitResponseTopic,
@@ -998,6 +998,21 @@ impl Storage for Engine {
 
     #[instrument(skip_all)]
     async fn maintain(&self, _now: SystemTime) -> nisshi_storage::Result<()> {
+        unimplemented!()
+    }
+
+    #[instrument(skip_all)]
+    async fn maintain_transactions(&self, _now: SystemTime) -> nisshi_storage::Result<()> {
+        unimplemented!()
+    }
+
+    #[instrument(skip_all)]
+    async fn aborted_transactions(
+        &self,
+        _topition: &Topition,
+        _offset: i64,
+        _last_stable_offset: i64,
+    ) -> nisshi_storage::Result<Vec<AbortedTransaction>> {
         unimplemented!()
     }
 

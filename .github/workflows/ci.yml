@@ -54,8 +54,9 @@ jobs:
       - run: echo ${PG_IMAGE_DASH}
       - run: df -h
       - uses: actions/checkout@v6
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - run: just ci
+      - run: sudo apt-get update
       - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -87,7 +88,7 @@ jobs:
           - ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
@@ -101,7 +102,7 @@ jobs:
           - ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
@@ -115,7 +116,7 @@ jobs:
           - ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
@@ -139,6 +140,7 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
+      - run: sudo apt-get update
       - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - run: cargo build  --no-default-features --features ${{matrix.storage}}
   build-storage-lake:
@@ -163,13 +165,14 @@ jobs:
         with:
           components: clippy, rustfmt
           cache: false
+      - run: sudo apt-get update
       - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - run: cargo build --features ${{matrix.storage}} --features ${{matrix.lake}}
   compat-librdkafka:
     runs-on: ${{matrix.os}}
-    continue-on-error: true
+    continue-on-error: ${{ matrix.storage.experimental }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os:
           - ubuntu-latest
@@ -177,15 +180,19 @@ jobs:
           - name: memory
             engine: memory://
             features: dynostore
+            experimental: false
           - name: s3
             engine: s3://nisshi/
             features: dynostore
+            experimental: true
           - name: postgres
             engine: postgres://postgres:postgres@localhost
             features: postgres
+            experimental: true
           - name: sqlite
             engine: sqlite://nisshi.db
             features: libsql
+            experimental: true
     env:
       ADVERTISED_LISTENER_URL: tcp://localhost:9092
       AWS_ACCESS_KEY_ID: minioadmin
@@ -202,7 +209,8 @@ jobs:
       NISSHI_IMAGE: hello-world
     steps:
       - uses: actions/checkout@v6
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
+      - run: sudo apt-get update
       - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -219,32 +227,28 @@ jobs:
     if: always()
     needs: [compat-librdkafka]
     runs-on: ubuntu-latest
+    env:
+      DUCKDB_CLI: /home/runner/.duckdb/cli/latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            .github/workflows/scripts/pivot-integration-report.sql
+          sparse-checkout-cone-mode: false
+          path: reports
       - uses: actions/download-artifact@v8
         with:
           pattern: compat-librdkafka-results-*
           path: results
           merge-multiple: true
-      - run: |
-          {
-            echo "## librdkafka compatibility report card"
-            echo
-            echo "| storage engine | test | result |"
-            echo "|---|---|---|"
-          } >> "${GITHUB_STEP_SUMMARY}"
-          for f in results/results-*.csv; do
-            [[ -e "${f}" ]] || continue
-            storage="$(basename "${f}" .csv)"
-            storage="${storage#results-}"
-            awk -F, -v s="${storage}" \
-                '{printf "| %s | %s | %s |\n", s, $1, ($2 == "PASS" ? "✅ PASS" : "❌ FAIL")}' \
-                "${f}"
-          done | sort >> "${GITHUB_STEP_SUMMARY}"
+      - run: curl https://install.duckdb.org | sh
+      - run: echo "## librdkafka compatibility report card" >> "${GITHUB_STEP_SUMMARY}"
+      - run: $DUCKDB_CLI/duckdb -markdown -f reports/.github/workflows/scripts/pivot-integration-report.sql >> "${GITHUB_STEP_SUMMARY}"
   compat-franz-go:
     runs-on: ${{matrix.os}}
-    continue-on-error: true
+    continue-on-error: ${{ matrix.storage.experimental }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os:
           - ubuntu-latest
@@ -252,15 +256,19 @@ jobs:
           - name: memory
             engine: memory://
             features: dynostore
+            experimental: false
           - name: s3
             engine: s3://nisshi/
             features: dynostore
+            experimental: true
           - name: postgres
             engine: postgres://postgres:postgres@localhost
             features: postgres
+            experimental: true
           - name: sqlite
             engine: sqlite://nisshi.db
             features: libsql
+            experimental: true
     env:
       ADVERTISED_LISTENER_URL: tcp://localhost:9092
       AWS_ACCESS_KEY_ID: minioadmin
@@ -277,11 +285,11 @@ jobs:
       NISSHI_IMAGE: hello-world
     steps:
       - uses: actions/checkout@v6
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
       - run: just compat-franz-go '${{matrix.storage.engine}}' '${{matrix.storage.features}}'
@@ -295,27 +303,23 @@ jobs:
     if: always()
     needs: [compat-franz-go]
     runs-on: ubuntu-latest
+    env:
+      DUCKDB_CLI: /home/runner/.duckdb/cli/latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            .github/workflows/scripts/pivot-integration-report.sql
+          sparse-checkout-cone-mode: false
+          path: reports
       - uses: actions/download-artifact@v8
         with:
           pattern: compat-franz-go-results-*
           path: results
           merge-multiple: true
-      - run: |
-          {
-            echo "## franz-go compatibility report card"
-            echo
-            echo "| storage engine | test | result |"
-            echo "|---|---|---|"
-          } >> "${GITHUB_STEP_SUMMARY}"
-          for f in results/results-*.csv; do
-            [[ -e "${f}" ]] || continue
-            storage="$(basename "${f}" .csv)"
-            storage="${storage#results-}"
-            awk -F, -v s="${storage}" \
-                '{printf "| %s | %s | %s |\n", s, $1, ($2 == "PASS" ? "✅ PASS" : "❌ FAIL")}' \
-                "${f}"
-          done | sort >> "${GITHUB_STEP_SUMMARY}"
+      - run: curl https://install.duckdb.org | sh
+      - run: echo "## franz-go compatibility report card" >> "${GITHUB_STEP_SUMMARY}"
+      - run: $DUCKDB_CLI/duckdb -markdown -f reports/.github/workflows/scripts/pivot-integration-report.sql >> "${GITHUB_STEP_SUMMARY}"
   cargo-publish-dry-run:
     runs-on: ${{matrix.os}}
     strategy:
@@ -326,15 +330,31 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: sudo apt-get update
       - run: sudo apt-get install -y libclang-dev libkrb5-dev
       - run: cargo publish --dry-run --workspace
   typos:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: crate-ci/typos@v1.44.0
+      - uses: crate-ci/typos@v1.48.0
         with:
           config: typos.toml
+  third-party-license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - env:
+          CARGO_ABOUT_VERSION: 0.8.4
+        run: |
+          cargo install "cargo-about@$CARGO_ABOUT_VERSION"
+          cargo about generate about.hbs >THIRD-PARTY-LICENSE.html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: third-party-license
+          path: THIRD-PARTY-LICENSE.html
+          if-no-files-found: error
   src:
     runs-on: ubuntu-latest
     steps:
@@ -532,6 +552,6 @@ jobs:
           path: nisshi-${{matrix.target}}.tar.gz
           if-no-files-found: error
       - if: ${{matrix.enabled && github.ref_type == 'tag'}}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: nisshi-${{matrix.target}}.tar.gz

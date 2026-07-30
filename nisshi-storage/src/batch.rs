@@ -31,6 +31,7 @@ use nisshi_sans_io::{
     describe_cluster_response::DescribeClusterBroker,
     describe_configs_response::DescribeConfigsResult,
     describe_topic_partitions_response::DescribeTopicPartitionsResponseTopic,
+    fetch_response::AbortedTransaction,
     incremental_alter_configs_request::AlterConfigsResource,
     incremental_alter_configs_response::AlterConfigsResourceResponse,
     list_groups_response::ListedGroup,
@@ -624,6 +625,21 @@ where
         self.storage.maintain(now).await
     }
 
+    async fn maintain_transactions(&self, now: SystemTime) -> Result<()> {
+        self.storage.maintain_transactions(now).await
+    }
+
+    async fn aborted_transactions(
+        &self,
+        topition: &Topition,
+        offset: i64,
+        last_stable_offset: i64,
+    ) -> Result<Vec<AbortedTransaction>> {
+        self.storage
+            .aborted_transactions(topition, offset, last_stable_offset)
+            .await
+    }
+
     async fn cluster_id(&self) -> Result<String> {
         self.storage.cluster_id().await
     }
@@ -935,6 +951,19 @@ mod tests {
         }
 
         async fn maintain(&self, _now: SystemTime) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn maintain_transactions(&self, _now: SystemTime) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn aborted_transactions(
+            &self,
+            _topition: &Topition,
+            _offset: i64,
+            _last_stable_offset: i64,
+        ) -> Result<Vec<AbortedTransaction>> {
             unimplemented!()
         }
 
