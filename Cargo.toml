@@ -22,7 +22,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "v0.7.0-pre.2"
+version = "0.7.0-pre.2"
 license = "Apache-2.0"
 homepage = "https://nisshi.io"
 repository = "https://github.com/nisshi-io/nisshi"
@@ -147,22 +147,22 @@ sha2 = "0.10.9"
 slatedb = "0.10.1"
 snap = "1.1.1"
 syn = { version = "2.0", features = ["full"] }
-nisshi = { version = "v0.7.0-pre.2", path = "nisshi", default-features = false }
-nisshi-auth = { version = "v0.7.0-pre.2", path = "nisshi-auth", default-features = false }
-nisshi-broker = { version = "v0.7.0-pre.2", path = "nisshi-broker", default-features = false }
-nisshi-cat = { version = "v0.7.0-pre.2", path = "nisshi-cat", default-features = false }
-nisshi-cli = { version = "v0.7.0-pre.2", path = "nisshi-cli", default-features = false }
-nisshi-client = { version = "v0.7.0-pre.2", path = "nisshi-client", default-features = false }
-nisshi-generator = { version = "v0.7.0-pre.2", path = "nisshi-generator", default-features = false }
-nisshi-model = { version = "v0.7.0-pre.2", path = "nisshi-model", default-features = false }
-nisshi-otel = { version = "v0.7.0-pre.2", path = "nisshi-otel", default-features = false }
-nisshi-perf = { version = "v0.7.0-pre.2", path = "nisshi-perf", default-features = false }
-nisshi-proxy = { version = "v0.7.0-pre.2", path = "nisshi-proxy", default-features = false }
-nisshi-sans-io = { version = "v0.7.0-pre.2", path = "nisshi-sans-io", default-features = false }
-nisshi-schema = { version = "v0.7.0-pre.2", path = "nisshi-schema", default-features = false }
-nisshi-service = { version = "v0.7.0-pre.2", path = "nisshi-service", default-features = false }
-nisshi-storage = { version = "v0.7.0-pre.2", path = "nisshi-storage", default-features = false }
-nisshi-topic = { version = "v0.7.0-pre.2", path = "nisshi-topic", default-features = false }
+nisshi = { version = "0.7.0-pre.2", path = "nisshi", default-features = false }
+nisshi-auth = { version = "0.7.0-pre.2", path = "nisshi-auth", default-features = false }
+nisshi-broker = { version = "0.7.0-pre.2", path = "nisshi-broker", default-features = false }
+nisshi-cat = { version = "0.7.0-pre.2", path = "nisshi-cat", default-features = false }
+nisshi-cli = { version = "0.7.0-pre.2", path = "nisshi-cli", default-features = false }
+nisshi-client = { version = "0.7.0-pre.2", path = "nisshi-client", default-features = false }
+nisshi-generator = { version = "0.7.0-pre.2", path = "nisshi-generator", default-features = false }
+nisshi-model = { version = "0.7.0-pre.2", path = "nisshi-model", default-features = false }
+nisshi-otel = { version = "0.7.0-pre.2", path = "nisshi-otel", default-features = false }
+nisshi-perf = { version = "0.7.0-pre.2", path = "nisshi-perf", default-features = false }
+nisshi-proxy = { version = "0.7.0-pre.2", path = "nisshi-proxy", default-features = false }
+nisshi-sans-io = { version = "0.7.0-pre.2", path = "nisshi-sans-io", default-features = false }
+nisshi-schema = { version = "0.7.0-pre.2", path = "nisshi-schema", default-features = false }
+nisshi-service = { version = "0.7.0-pre.2", path = "nisshi-service", default-features = false }
+nisshi-storage = { version = "0.7.0-pre.2", path = "nisshi-storage", default-features = false }
+nisshi-topic = { version = "0.7.0-pre.2", path = "nisshi-topic", default-features = false }
 tempfile = "3"
 thiserror = "2.0"
 time = { version = "0.3.47", features = ["formatting", "macros", "parsing"] }
